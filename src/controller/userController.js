@@ -16,7 +16,22 @@ const generateOTP = () => {
 
 const registerCustomerAndSendOTP = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phone, photo, companyName, companyAddress, companyVAT } = req.body;
+    const { 
+      firstName, 
+      lastName, 
+      email, 
+      password, 
+      phone, 
+      photo, 
+      companyName, 
+      companyAddress, 
+      companyVAT,
+      // New customer fields
+      businessType,
+      industry,
+      originCountries,
+      destinationMarkets
+    } = req.body;
 
     // Validation
     if (!firstName || !lastName || !email || !password) {
@@ -66,27 +81,66 @@ const registerCustomerAndSendOTP = async (req, res) => {
       user.companyName = companyName || "";
       user.companyAddress = companyAddress || "";
       user.companyVAT = companyVAT || "";
+      user.businessType = businessType || 'Trader';
+      user.industry = industry || "";
+      user.originCountries = originCountries || ['China', 'Thailand'];
+      user.destinationMarkets = destinationMarkets || ['USA', 'UK', 'Canada'];
+      user.customerStatus = 'Active';
+      user.customerSince = new Date();
       user.role = 'customer'; // Always customer for registration
       user.registrationOTP = otp;
       user.registrationOTPExpires = otpExpiry;
       user.otpAttempts = 0;
+      user.updatedAt = new Date();
     } else {
-      // Create new customer user
+      // Create new customer user with all customer-specific fields
       user = new UserModel({
+        // Personal Information
         firstName,
         lastName,
         email,
         password: hashedPassword,
         phone: phone || "",
         photo: photo || "",
-        companyName: companyName || "",
-        companyAddress: companyAddress || "",
-        companyVAT: companyVAT || "",
-        role: 'customer', // Default role is customer
+        
+        // Role and Authentication
+        role: 'customer',
         isVerified: false,
         registrationOTP: otp,
         registrationOTPExpires: otpExpiry,
-        otpAttempts: 0
+        otpAttempts: 0,
+        
+        // Company Information (B2B Customer)
+        companyName: companyName || "",
+        companyAddress: companyAddress || "",
+        companyVAT: companyVAT || "",
+        
+        // Business Information
+        businessType: businessType || 'Trader',
+        industry: industry || "",
+        
+        // Shipping Information
+        originCountries: originCountries || ['China', 'Thailand'],
+        destinationMarkets: destinationMarkets || ['USA', 'UK', 'Canada'],
+        
+        // Customer Status
+        customerStatus: 'Active',
+        customerSince: new Date(),
+        
+        // System Fields
+        status: 'active',
+        isActive: true,
+        
+        // Preferences
+        notificationPreferences: {
+          emailNotifications: true,
+          shipmentUpdates: true,
+          invoiceNotifications: true,
+          marketingEmails: false
+        },
+        preferredCurrency: 'USD',
+        language: 'en',
+        timezone: 'UTC'
       });
     }
 
@@ -98,6 +152,7 @@ const registerCustomerAndSendOTP = async (req, res) => {
     const responseData = {
       email: user.email,
       role: user.role,
+      companyName: user.companyName,
       expiresAt: otpExpiry
     };
     
@@ -109,29 +164,62 @@ const registerCustomerAndSendOTP = async (req, res) => {
     
     res.status(200).json({
       success: true,
-      message: emailResult.message || "OTP sent to your email",
+      message: emailResult.message || "OTP sent to your email. Please verify to complete registration.",
       data: responseData
     });
 
   } catch (error) {
     console.error("Customer registration error:", error);
+    
+    // Handle duplicate email error
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already exists",
+        error: "Duplicate email address"
+      });
+    }
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: messages
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: "Registration failed",
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
     });
   }
 };
-
 // ==================== STAFF CREATION (Admin Only - No OTP Needed) ====================
 
 const createStaff = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phone, role, employeeId, department } = req.body;
+    const { 
+      firstName, 
+      lastName, 
+      email, 
+      password, 
+      phone, 
+      role, 
+      employeeId, 
+      department,
+      designation,
+      // Role-specific fields
+      warehouseLocation,
+      warehouseAccess,
+      assignedCustomers
+    } = req.body;
 
     // Check if requester is admin (from auth middleware)
     const requester = await UserModel.findById(req.user.userId);
-    if (requester.role !== 'admin') {
+    if (!requester || requester.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: "Access denied. Admin only."
@@ -168,42 +256,118 @@ const createStaff = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create staff user (no OTP needed)
-    const staff = new UserModel({
+    // Create base staff object
+    const staffData = {
+      // Personal Information
       firstName,
       lastName,
       email,
       password: hashedPassword,
       phone: phone || "",
+      photo: "",
+      
+      // Role and System
       role,
+      isVerified: true,
+      status: 'active',
+      isActive: true,
+      
+      // Staff Information
       employeeId: employeeId || "",
       department: department || "",
-      isVerified: true, // Staff are verified immediately
+      designation: designation || "",
+      employmentDate: new Date(),
+      
+      // Created by
       createdBy: req.user.userId,
-      createDate: new Date(),
-      updateDate: new Date()
-    });
+      
+      // Authentication (no OTP needed for staff)
+      resetPasswordOTP: undefined,
+      resetPasswordOTPExpires: undefined,
+      
+      // Preferences
+      notificationPreferences: {
+        emailNotifications: true,
+        shipmentUpdates: true,
+        invoiceNotifications: true,
+        marketingEmails: false
+      },
+      preferredCurrency: 'USD',
+      language: 'en',
+      timezone: 'UTC'
+    };
 
+    // Add role-specific fields
+    if (role === 'operations') {
+      staffData.assignedCustomers = assignedCustomers || [];
+      staffData.permissions = [
+        'confirm_bookings',
+        'update_shipment_milestones',
+        'upload_shipment_docs',
+        'assign_to_container',
+        'generate_tracking_numbers',
+        'view_customer_shipments',
+        'create_shipment_quotes'
+      ];
+    } 
+    
+    else if (role === 'warehouse') {
+      staffData.warehouseLocation = warehouseLocation || "";
+      staffData.warehouseAccess = warehouseAccess || ['China_Warehouse', 'Thailand_Warehouse'];
+      staffData.permissions = [
+        'receive_cargo',
+        'assign_warehouse_location',
+        'group_shipments',
+        'update_container_loading',
+        'view_warehouse_inventory',
+        'manage_packages'
+      ];
+    }
+
+    // Create staff user
+    const staff = new UserModel(staffData);
     await staff.save();
 
-    // Remove sensitive data
-    const staffData = staff.toObject();
-    delete staffData.password;
-    delete staffData.registrationOTP;
-    delete staffData.registrationOTPExpires;
+    // Remove sensitive data from response
+    const responseData = staff.toObject();
+    delete responseData.password;
+    delete responseData.registrationOTP;
+    delete responseData.registrationOTPExpires;
+    delete responseData.resetPasswordOTP;
+    delete responseData.resetPasswordOTPExpires;
 
     res.status(201).json({
       success: true,
       message: `${role.charAt(0).toUpperCase() + role.slice(1)} staff created successfully`,
-      data: staffData
+      data: responseData
     });
 
   } catch (error) {
     console.error("Create staff error:", error);
+    
+    // Handle duplicate email error
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already exists in the system",
+        error: "Duplicate email address"
+      });
+    }
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: messages
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: "Failed to create staff",
-      error: error.message
+      message: "Failed to create staff member",
+      error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
     });
   }
 };

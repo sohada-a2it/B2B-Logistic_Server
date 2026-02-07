@@ -1,11 +1,9 @@
-
 // middleware/AuthVerifyMiddleWare.js - UPDATED
 const jwt = require("jsonwebtoken");
 const User = require("../models/userModel");
 
 exports.protect = async (req, res, next) => {
   console.log('🔐 Protect Middleware Called');
-  console.log('🔍 Full Authorization Header:', req.headers.authorization);
   
   let token;
 
@@ -16,60 +14,78 @@ exports.protect = async (req, res, next) => {
     try {
       token = req.headers.authorization.split(" ")[1];
       
-      // ✅ CRITICAL FIX: Remove all whitespace (newlines, spaces, tabs)
+      // ✅ Remove whitespace
       token = token.replace(/\s+/g, '');
       
-      console.log('🔐 Token after cleaning:');
-      console.log('Length:', token.length);
-      console.log('First 50 chars:', token.substring(0, 50));
-      console.log('Contains dot?', token.includes('.'));
-      console.log('Number of dots:', token.split('.').length);
+      console.log('🔐 Token Info - Length:', token.length);
       
-      // Check if it's a valid JWT format (should have 2 dots)
-      if (token.split('.').length !== 3) {
-        console.log('❌ Invalid JWT format - wrong number of parts');
-        return res.status(401).json({ message: "Invalid token format" });
-      }
-      
-      console.log('🔐 JWT_SECRET exists?', !!process.env.JWT_SECRET);
       const secret = process.env.JWT_SECRET || 'fallback_secret_for_dev_123';
       
       console.log('🔄 Verifying token...');
       const decoded = jwt.verify(token, secret);
-      console.log('✅ Token verified successfully!');
-      console.log('Decoded user ID:', decoded.id);
-      console.log('Decoded email:', decoded.email);
+      console.log('✅ Token verified! Decoded:', decoded);
       
-      req.user = await User.findById(decoded.id).select("-password");
+      // ✅ FIX: Check for both 'userId' and 'id' in token
+      const userId = decoded.userId || decoded.id || decoded._id;
+      console.log('🆔 Extracted User ID from token:', userId);
       
-      if (!req.user) {
-        console.log('❌ User not found in database');
-        return res.status(401).json({ message: "User not found" });
+      if (!userId) {
+        console.log('❌ No user ID found in token');
+        return res.status(401).json({ 
+          success: false,
+          message: "No user ID in token" 
+        });
       }
       
-      console.log('✅ User authenticated:', req.user.email);
+      // ✅ Find user by ID
+      const user = await User.findById(userId).select("-password");
+      
+      if (!user) {
+        console.log('❌ User not found in database for ID:', userId);
+        return res.status(401).json({ 
+          success: false,
+          message: "User not found" 
+        });
+      }
+      
+      // ✅ Set req.user with proper structure
+      req.user = {
+        userId: user._id.toString(),  // ✅ This is what controller uses
+        _id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        role: user.role,
+        ...user.toObject()
+      };
+      
+      console.log('✅ User authenticated:', req.user.email, 'ID:', req.user.userId);
       next();
     } catch (error) {
-      console.log('❌ Token verification FAILED!');
-      console.log('Error name:', error.name);
-      console.log('Error message:', error.message);
-      console.log('Token that failed:', token ? token.substring(0, 100) : 'No token');
+      console.log('❌ Token verification FAILED:', error.message);
       
-      // Send specific error messages
       if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({ message: "Token expired" });
+        return res.status(401).json({ 
+          success: false,
+          message: "Token expired" 
+        });
       } else if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({ message: "Invalid token" });
-      } else if (error.name === 'SyntaxError') {
-        return res.status(401).json({ message: "Malformed token" });
+        return res.status(401).json({ 
+          success: false,
+          message: "Invalid token" 
+        });
       }
       
-      return res.status(401).json({ message: "Unauthorized" });
+      return res.status(401).json({ 
+        success: false,
+        message: "Unauthorized" 
+      });
     }
   } else {
     console.log('❌ No Bearer token in headers');
-    console.log('Available headers:', Object.keys(req.headers));
-    return res.status(401).json({ message: "No token found" });
+    return res.status(401).json({ 
+      success: false,
+      message: "No token found" 
+    });
   }
 };
 
@@ -77,10 +93,12 @@ exports.adminOnly = (req, res, next) => {
   console.log('👑 Admin check for:', req.user?.email);
   
   if (req.user.role !== "admin") {
-    return res.status(403).json({ message: "Admin only access" });
+    return res.status(403).json({ 
+      success: false,
+      message: "Admin only access" 
+    });
   }
   
   console.log('✅ Admin access granted');
   next();
 };
- 
