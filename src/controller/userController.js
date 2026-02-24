@@ -26,7 +26,6 @@ const registerCustomerAndSendOTP = async (req, res) => {
       companyName, 
       companyAddress, 
       companyVAT,
-      // New customer fields
       businessType,
       industry,
       originCountries,
@@ -60,6 +59,11 @@ const registerCustomerAndSendOTP = async (req, res) => {
       isVerified: false 
     });
 
+    if (existingUnverifiedUser) {
+      // Delete old unverified user
+      await UserModel.deleteOne({ _id: existingUnverifiedUser._id });
+    }
+
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
@@ -69,90 +73,37 @@ const registerCustomerAndSendOTP = async (req, res) => {
     const otpExpiry = new Date();
     otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
 
-    let user;
-    if (existingUnverifiedUser) {
-      // Update existing unverified user
-      user = existingUnverifiedUser;
-      user.firstName = firstName;
-      user.lastName = lastName;
-      user.password = hashedPassword;
-      user.phone = phone || "";
-      user.photo = photo || "";
-      user.companyName = companyName || "";
-      user.companyAddress = companyAddress || "";
-      user.companyVAT = companyVAT || "";
-      user.businessType = businessType || 'Trader';
-      user.industry = industry || "";
-      user.originCountries = originCountries || ['China', 'Thailand'];
-      user.destinationMarkets = destinationMarkets || ['USA', 'UK', 'Canada'];
-      user.customerStatus = 'Active';
-      user.customerSince = new Date();
-      user.role = 'customer'; // Always customer for registration
-      user.registrationOTP = otp;
-      user.registrationOTPExpires = otpExpiry;
-      user.otpAttempts = 0;
-      user.updatedAt = new Date();
-    } else {
-      // Create new customer user with all customer-specific fields
-      user = new UserModel({
-        // Personal Information
-        firstName,
-        lastName,
-        email,
-        password: hashedPassword,
-        phone: phone || "",
-        photo: photo || "",
-        
-        // Role and Authentication
-        role: 'customer',
-        isVerified: false,
-        registrationOTP: otp,
-        registrationOTPExpires: otpExpiry,
-        otpAttempts: 0,
-        
-        // Company Information (B2B Customer)
-        companyName: companyName || "",
-        companyAddress: companyAddress || "",
-        companyVAT: companyVAT || "",
-        
-        // Business Information
-        businessType: businessType || 'Trader',
-        industry: industry || "",
-        
-        // Shipping Information
-        originCountries: originCountries || ['China', 'Thailand'],
-        destinationMarkets: destinationMarkets || ['USA', 'UK', 'Canada'],
-        
-        // Customer Status
-        customerStatus: 'Active',
-        customerSince: new Date(),
-        
-        // System Fields
-        status: 'active',
-        isActive: true,
-        
-        // Preferences
-        notificationPreferences: {
-          emailNotifications: true,
-          shipmentUpdates: true,
-          invoiceNotifications: true,
-          marketingEmails: false
-        },
-        preferredCurrency: 'USD',
-        language: 'en',
-        timezone: 'UTC'
-      });
-    }
-
-    await user.save();
-
-    // Send OTP via Email
+    // Send OTP via Email first
     const emailResult = await sendRegistrationOTPEmail(email, otp, firstName);
     
+    // Store user data temporarily in cache/Redis
+    const tempUserData = {
+      firstName,
+      lastName,
+      email,
+      password: hashedPassword,
+      phone: phone || "",
+      photo: photo || "",
+      companyName: companyName || "",
+      companyAddress: companyAddress || "",
+      companyVAT: companyVAT || "",
+      businessType: businessType || 'Trader',
+      industry: industry || "",
+      originCountries: originCountries || ['China', 'Thailand'],
+      destinationMarkets: destinationMarkets || ['USA', 'UK', 'Canada'],
+      otp,
+      otpExpiry,
+      createdAt: new Date()
+    };
+
+    // Store in temporary storage (Redis recommended)
+    // await redisClient.setex(`temp_registration:${email}`, 600, JSON.stringify(tempUserData));
+    
+    // For development without Redis, you can use a Map
+    // tempStorage.set(email, tempUserData);
+    
     const responseData = {
-      email: user.email,
-      role: user.role,
-      companyName: user.companyName,
+      email,
       expiresAt: otpExpiry
     };
     
@@ -171,28 +122,105 @@ const registerCustomerAndSendOTP = async (req, res) => {
   } catch (error) {
     console.error("Customer registration error:", error);
     
-    // Handle duplicate email error
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: "Email already exists",
-        error: "Duplicate email address"
-      });
-    }
-    
-    // Handle validation errors
-    if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map(val => val.message);
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: messages
-      });
-    }
-    
     res.status(500).json({
       success: false,
       message: "Registration failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
+    });
+  }
+};
+
+// OTP Verification function
+const verifyCustomerOTP = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and OTP are required"
+      });
+    }
+
+    // Get temporary data from storage
+    // const tempData = await redisClient.get(`temp_registration:${email}`);
+    // if (!tempData) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Registration session expired or invalid"
+    //   });
+    // }
+    
+    // const userData = JSON.parse(tempData);
+    
+    // Check OTP
+    if (userData.otp !== otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP"
+      });
+    }
+
+    // Check OTP expiry
+    if (new Date() > new Date(userData.otpExpiry)) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired"
+      });
+    }
+
+    // Create verified user in database
+    const user = new UserModel({
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      email: userData.email,
+      password: userData.password,
+      phone: userData.phone,
+      photo: userData.photo,
+      role: 'customer',
+      isVerified: true,
+      companyName: userData.companyName,
+      companyAddress: userData.companyAddress,
+      companyVAT: userData.companyVAT,
+      businessType: userData.businessType,
+      industry: userData.industry,
+      originCountries: userData.originCountries,
+      destinationMarkets: userData.destinationMarkets,
+      customerStatus: 'Active',
+      customerSince: new Date(),
+      status: 'active',
+      isActive: true,
+      notificationPreferences: {
+        emailNotifications: true,
+        shipmentUpdates: true,
+        invoiceNotifications: true,
+        marketingEmails: false
+      },
+      preferredCurrency: 'USD',
+      language: 'en',
+      timezone: 'UTC'
+    });
+
+    await user.save();
+
+    // Clear temporary data
+    // await redisClient.del(`temp_registration:${email}`);
+
+    res.status(200).json({
+      success: true,
+      message: "Registration completed successfully",
+      data: {
+        email: user.email,
+        role: user.role,
+        companyName: user.companyName
+      }
+    });
+
+  } catch (error) {
+    console.error("OTP verification error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Verification failed",
       error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
     });
   }
