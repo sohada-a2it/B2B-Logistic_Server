@@ -7,6 +7,19 @@ const {
   sendWelcomeEmail 
 } = require("../service/emailService");
 
+// Temporary storage (use Redis in production)
+const tempRegistrationStore = new Map();
+
+// Clean up expired temp data every hour
+setInterval(() => {
+  const now = new Date();
+  for (const [email, data] of tempRegistrationStore.entries()) {
+    if (now > data.otpExpiry) {
+      tempRegistrationStore.delete(email);
+    }
+  }
+}, 3600000); // 1 hour
+
 // Generate OTP
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -40,9 +53,9 @@ const registerCustomerAndSendOTP = async (req, res) => {
       });
     }
 
-    // Check if already registered and verified (any role)
+    // Check if email already exists and is verified
     const existingVerifiedUser = await UserModel.findOne({ 
-      email, 
+      email: email.toLowerCase(), 
       isVerified: true 
     });
     
@@ -53,15 +66,9 @@ const registerCustomerAndSendOTP = async (req, res) => {
       });
     }
 
-    // Check if unverified user exists
-    const existingUnverifiedUser = await UserModel.findOne({ 
-      email, 
-      isVerified: false 
-    });
-
-    if (existingUnverifiedUser) {
-      // Delete old unverified user
-      await UserModel.deleteOne({ _id: existingUnverifiedUser._id });
+    // Check if there's existing temp registration
+    if (tempRegistrationStore.has(email)) {
+      tempRegistrationStore.delete(email); // Remove old temp data
     }
 
     // Hash password
@@ -73,14 +80,14 @@ const registerCustomerAndSendOTP = async (req, res) => {
     const otpExpiry = new Date();
     otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
 
-    // Send OTP via Email first
+    // Send OTP via Email
     const emailResult = await sendRegistrationOTPEmail(email, otp, firstName);
     
-    // Store user data temporarily in cache/Redis
+    // Store user data temporarily in Map (use Redis in production)
     const tempUserData = {
       firstName,
       lastName,
-      email,
+      email: email.toLowerCase(),
       password: hashedPassword,
       phone: phone || "",
       photo: photo || "",
@@ -96,21 +103,18 @@ const registerCustomerAndSendOTP = async (req, res) => {
       createdAt: new Date()
     };
 
-    // Store in temporary storage (Redis recommended)
-    // await redisClient.setex(`temp_registration:${email}`, 600, JSON.stringify(tempUserData));
-    
-    // For development without Redis, you can use a Map
-    // tempStorage.set(email, tempUserData);
+    // Store in temporary storage
+    tempRegistrationStore.set(email.toLowerCase(), tempUserData);
     
     const responseData = {
       email,
       expiresAt: otpExpiry
     };
     
-    // যদি development বা fallback mode হয়, OTP রেসপন্সে পাঠান
-    if (emailResult.mode === 'development' || emailResult.mode === 'fallback') {
+    // Development mode-এ OTP রেসপন্সে পাঠান
+    if (process.env.NODE_ENV === 'development' || emailResult.mode === 'fallback') {
       responseData.otp = otp;
-      console.log(`📧 OTP included in response: ${otp}`);
+      console.log(`📧 OTP for ${email}: ${otp}`);
     }
     
     res.status(200).json({
@@ -130,7 +134,7 @@ const registerCustomerAndSendOTP = async (req, res) => {
   }
 };
 
-// OTP Verification function
+// OTP Verification and Save to MongoDB
 const verifyCustomerOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -143,18 +147,16 @@ const verifyCustomerOTP = async (req, res) => {
     }
 
     // Get temporary data from storage
-    // const tempData = await redisClient.get(`temp_registration:${email}`);
-    // if (!tempData) {
-    //   return res.status(400).json({
-    //     success: false,
-    //     message: "Registration session expired or invalid"
-    //   });
-    // }
-    
-    // const userData = JSON.parse(tempData);
+    const tempData = tempRegistrationStore.get(email.toLowerCase());
+    if (!tempData) {
+      return res.status(400).json({
+        success: false,
+        message: "Registration session expired or invalid. Please register again."
+      });
+    }
     
     // Check OTP
-    if (userData.otp !== otp) {
+    if (tempData.otp !== otp) {
       return res.status(400).json({
         success: false,
         message: "Invalid OTP"
@@ -162,30 +164,45 @@ const verifyCustomerOTP = async (req, res) => {
     }
 
     // Check OTP expiry
-    if (new Date() > new Date(userData.otpExpiry)) {
+    if (new Date() > new Date(tempData.otpExpiry)) {
+      tempRegistrationStore.delete(email.toLowerCase());
       return res.status(400).json({
         success: false,
-        message: "OTP has expired"
+        message: "OTP has expired. Please register again."
       });
     }
 
-    // Create verified user in database
+    // Check if user somehow already exists (double-check)
+    const existingUser = await UserModel.findOne({ 
+      email: email.toLowerCase(),
+      isVerified: true 
+    });
+    
+    if (existingUser) {
+      tempRegistrationStore.delete(email.toLowerCase());
+      return res.status(400).json({
+        success: false,
+        message: "User already registered with this email"
+      });
+    }
+
+    // Create verified user in database (ONLY AFTER OTP VERIFICATION)
     const user = new UserModel({
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      email: userData.email,
-      password: userData.password,
-      phone: userData.phone,
-      photo: userData.photo,
+      firstName: tempData.firstName,
+      lastName: tempData.lastName,
+      email: tempData.email,
+      password: tempData.password,
+      phone: tempData.phone,
+      photo: tempData.photo,
       role: 'customer',
       isVerified: true,
-      companyName: userData.companyName,
-      companyAddress: userData.companyAddress,
-      companyVAT: userData.companyVAT,
-      businessType: userData.businessType,
-      industry: userData.industry,
-      originCountries: userData.originCountries,
-      destinationMarkets: userData.destinationMarkets,
+      companyName: tempData.companyName,
+      companyAddress: tempData.companyAddress,
+      companyVAT: tempData.companyVAT,
+      businessType: tempData.businessType,
+      industry: tempData.industry,
+      originCountries: tempData.originCountries,
+      destinationMarkets: tempData.destinationMarkets,
       customerStatus: 'Active',
       customerSince: new Date(),
       status: 'active',
@@ -204,16 +221,37 @@ const verifyCustomerOTP = async (req, res) => {
     await user.save();
 
     // Clear temporary data
-    // await redisClient.del(`temp_registration:${email}`);
+    tempRegistrationStore.delete(email.toLowerCase());
+
+    // Send welcome email (optional - don't fail if it doesn't work)
+    try {
+      await sendWelcomeEmail(email, user.firstName);
+    } catch (emailError) {
+      console.error("Welcome email failed:", emailError);
+      // Don't fail registration if welcome email fails
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        role: user.role
+      },
+      process.env.JWT_SECRET || "your_secret_key",
+      { expiresIn: '7d' }
+    );
+
+    // Remove sensitive data from response
+    const userData = user.toObject();
+    delete userData.password;
 
     res.status(200).json({
       success: true,
       message: "Registration completed successfully",
-      data: {
-        email: user.email,
-        role: user.role,
-        companyName: user.companyName
-      }
+      token,
+      data: userData
     });
 
   } catch (error) {
@@ -225,6 +263,81 @@ const verifyCustomerOTP = async (req, res) => {
     });
   }
 };
+
+// Resend OTP
+const resendOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required"
+      });
+    }
+
+    // Get temporary data
+    const tempData = tempRegistrationStore.get(email.toLowerCase());
+    if (!tempData) {
+      return res.status(400).json({
+        success: false,
+        message: "Registration session expired. Please register again."
+      });
+    }
+
+    // Check if last OTP was sent within 1 minute
+    const lastSent = tempData.createdAt;
+    const oneMinuteAgo = new Date(Date.now() - 60000);
+    
+    if (lastSent > oneMinuteAgo) {
+      return res.status(429).json({
+        success: false,
+        message: "Please wait 1 minute before requesting another OTP"
+      });
+    }
+
+    // Generate new OTP
+    const otp = generateOTP();
+    const otpExpiry = new Date();
+    otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
+
+    // Update temp data
+    tempData.otp = otp;
+    tempData.otpExpiry = otpExpiry;
+    tempData.createdAt = new Date();
+    
+    tempRegistrationStore.set(email.toLowerCase(), tempData);
+
+    // Send OTP via Email
+    const emailResult = await sendRegistrationOTPEmail(email, otp, tempData.firstName);
+    
+    const responseData = {
+      email,
+      expiresAt: otpExpiry
+    };
+    
+    // Development mode-এ OTP রেসপন্সে পাঠান
+    if (process.env.NODE_ENV === 'development' || emailResult.mode === 'fallback') {
+      responseData.otp = otp;
+      console.log(`📧 New OTP for ${email}: ${otp}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "New OTP sent to your email",
+      data: responseData
+    });
+
+  } catch (error) {
+    console.error("Resend OTP error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to resend OTP",
+      error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
+    });
+  }
+};
+
 // ==================== STAFF CREATION (Admin Only - No OTP Needed) ====================
 
 const createStaff = async (req, res) => {
@@ -239,13 +352,12 @@ const createStaff = async (req, res) => {
       employeeId, 
       department,
       designation,
-      // Role-specific fields
       warehouseLocation,
       warehouseAccess,
       assignedCustomers
     } = req.body;
 
-    // Check if requester is admin (from auth middleware)
+    // Check if requester is admin
     const requester = await UserModel.findById(req.user.userId);
     if (!requester || requester.role !== 'admin') {
       return res.status(403).json({
@@ -272,7 +384,7 @@ const createStaff = async (req, res) => {
     }
 
     // Check if user already exists
-    const existingUser = await UserModel.findOne({ email });
+    const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -284,36 +396,23 @@ const createStaff = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create base staff object
+    // Create staff object
     const staffData = {
-      // Personal Information
       firstName,
       lastName,
-      email,
+      email: email.toLowerCase(),
       password: hashedPassword,
       phone: phone || "",
       photo: "",
-      
-      // Role and System
       role,
       isVerified: true,
       status: 'active',
       isActive: true,
-      
-      // Staff Information
       employeeId: employeeId || "",
       department: department || "",
       designation: designation || "",
       employmentDate: new Date(),
-      
-      // Created by
       createdBy: req.user.userId,
-      
-      // Authentication (no OTP needed for staff)
-      resetPasswordOTP: undefined,
-      resetPasswordOTPExpires: undefined,
-      
-      // Preferences
       notificationPreferences: {
         emailNotifications: true,
         shipmentUpdates: true,
@@ -337,9 +436,7 @@ const createStaff = async (req, res) => {
         'view_customer_shipments',
         'create_shipment_quotes'
       ];
-    } 
-    
-    else if (role === 'warehouse') {
+    } else if (role === 'warehouse') {
       staffData.warehouseLocation = warehouseLocation || "";
       staffData.warehouseAccess = warehouseAccess || ['China_Warehouse', 'Thailand_Warehouse'];
       staffData.permissions = [
@@ -359,36 +456,20 @@ const createStaff = async (req, res) => {
     // Remove sensitive data from response
     const responseData = staff.toObject();
     delete responseData.password;
-    delete responseData.registrationOTP;
-    delete responseData.registrationOTPExpires;
-    delete responseData.resetPasswordOTP;
-    delete responseData.resetPasswordOTPExpires;
 
     res.status(201).json({
       success: true,
-      message: `${role.charAt(0).toUpperCase() + role.slice(1)} staff created successfully`,
+      message: `${role} staff created successfully`,
       data: responseData
     });
 
   } catch (error) {
     console.error("Create staff error:", error);
     
-    // Handle duplicate email error
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: "Email already exists in the system",
-        error: "Duplicate email address"
-      });
-    }
-    
-    // Handle validation errors
-    if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map(val => val.message);
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: messages
+        message: "Email already exists in the system"
       });
     }
     
@@ -424,7 +505,7 @@ const createAdmin = async (req, res) => {
     }
 
     // Check if user already exists
-    const existingUser = await UserModel.findOne({ email });
+    const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -440,11 +521,13 @@ const createAdmin = async (req, res) => {
     const admin = new UserModel({
       firstName,
       lastName,
-      email,
+      email: email.toLowerCase(),
       password: hashedPassword,
       phone: phone || "",
       role: 'admin',
       isVerified: true,
+      status: 'active',
+      isActive: true,
       createDate: new Date(),
       updateDate: new Date()
     });
@@ -471,81 +554,55 @@ const createAdmin = async (req, res) => {
   }
 };
 
-// ==================== OTP VERIFICATION (Customer Only) ====================
+// ==================== LOGIN (All Roles) ====================
 
-const verifyOTPAndCompleteRegistration = async (req, res) => {
+const loginUser = async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, password } = req.body;
 
-    if (!email || !otp) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email and OTP are required"
+        message: "Email and password are required"
       });
     }
 
-    // Find unverified customer
+    // Find verified user
     const user = await UserModel.findOne({ 
       email: email.toLowerCase(), 
-      isVerified: false,
-      role: 'customer' // Only customers need OTP verification
+      isVerified: true 
     });
 
     if (!user) {
-      return res.status(404).json({
+      return res.status(401).json({
         success: false,
-        message: "Registration session not found. Please register again."
+        message: "Invalid email or password"
       });
     }
 
-    // Check OTP attempts
-    if (user.otpAttempts >= 5) {
-      return res.status(400).json({
+    // Check if user is active
+    if (user.status !== 'active' || !user.isActive) {
+      return res.status(403).json({
         success: false,
-        message: "Too many failed attempts. Please register again."
+        message: "Your account is deactivated. Please contact admin."
       });
     }
 
-    // Check OTP expiry
-    const now = new Date();
-    if (now > user.registrationOTPExpires) {
-      return res.status(400).json({
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
         success: false,
-        message: "OTP expired. Please register again."
+        message: "Invalid email or password"
       });
     }
 
-    // Verify OTP
-    if (user.registrationOTP !== otp) {
-      user.otpAttempts += 1;
-      user.updateDate = new Date();
-      await user.save();
-
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP",
-        attemptsLeft: 5 - user.otpAttempts
-      });
-    }
-
-    // Mark as verified
-    user.isVerified = true;
-    user.registrationOTP = undefined;
-    user.registrationOTPExpires = undefined;
-    user.otpAttempts = 0;
+    // Update last login
+    user.lastLogin = new Date();
     user.updateDate = new Date();
     await user.save();
 
-    // Send welcome email
-    try {
-      await sendWelcomeEmail(email, user.firstName);
-      console.log(`✅ Welcome email sent to ${email}`);
-    } catch (emailError) {
-      console.error("❌ Welcome email failed:", emailError);
-      // Don't fail registration if welcome email fails
-    }
-
-    // Generate JWT token with role
+    // Generate JWT token
     const token = jwt.sign(
       { 
         userId: user._id,
@@ -566,175 +623,7 @@ const verifyOTPAndCompleteRegistration = async (req, res) => {
       phone: user.phone,
       photo: user.photo,
       role: user.role,
-      companyName: user.companyName,
-      companyAddress: user.companyAddress,
-      companyVAT: user.companyVAT,
       isVerified: user.isVerified,
-      createDate: user.createDate
-    };
-
-    res.status(200).json({
-      success: true,
-      message: "Registration completed successfully!",
-      token,
-      data: userData
-    });
-
-  } catch (error) {
-    console.error("OTP verification error:", error);
-    res.status(500).json({
-      success: false,
-      message: "OTP verification failed",
-      error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
-    });
-  }
-};
-
-const resendOTP = async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "Email is required"
-      });
-    }
-
-    // Find unverified customer
-    const user = await UserModel.findOne({ 
-      email: email.toLowerCase(), 
-      isVerified: false,
-      role: 'customer'
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "Registration not found or already completed"
-      });
-    }
-
-    // Check if last OTP was sent within 1 minute
-    const lastSent = user.updateDate || user.createDate;
-    const oneMinuteAgo = new Date(Date.now() - 60000);
-    
-    if (lastSent > oneMinuteAgo) {
-      return res.status(429).json({
-        success: false,
-        message: "Please wait 1 minute before requesting another OTP"
-      });
-    }
-
-    // Generate new OTP
-    const otp = generateOTP();
-    const otpExpiry = new Date();
-    otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
-
-    // Update user
-    user.registrationOTP = otp;
-    user.registrationOTPExpires = otpExpiry;
-    user.otpAttempts = 0;
-    user.updateDate = new Date();
-    await user.save();
-
-    // Send OTP via Email
-    try {
-      await sendRegistrationOTPEmail(email, otp, user.firstName);
-      console.log(`✅ New OTP sent to ${email}: ${otp}`);
-    } catch (emailError) {
-      console.error("❌ Resend OTP email failed:", emailError);
-      
-      // Development mode-এ কনসোলে OTP দেখাবে
-      console.log(`📧 DEV MODE - New OTP for ${email}: ${otp}`);
-      
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error("Failed to resend OTP email");
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "New OTP sent to your email",
-      data: {
-        expiresAt: otpExpiry,
-        // Development mode-এ OTP রেসপন্সে পাঠান
-        ...(process.env.NODE_ENV === 'development' && { otp: otp })
-      }
-    });
-
-  } catch (error) {
-    console.error("Resend OTP error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to resend OTP",
-      error: process.env.NODE_ENV === 'development' ? error.message : "Internal server error"
-    });
-  }
-};
-
-// ==================== LOGIN (All Roles) ====================
-
-const loginUser = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and password are required"
-      });
-    }
-
-    // Find verified user (any role)
-    const user = await UserModel.findOne({ 
-      email: email.toLowerCase(), 
-      isVerified: true 
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password"
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password"
-      });
-    }
-
-    // Update last login time
-    user.updateDate = new Date();
-    await user.save();
-
-    // Generate JWT token with role
-    const token = jwt.sign(
-      { 
-        userId: user._id,
-        email: user.email,
-        firstName: user.firstName,
-        role: user.role
-      },
-      process.env.JWT_SECRET || "your_secret_key",
-      { expiresIn: '7d' }
-    );
-
-    // User data based on role
-    const userData = {
-      _id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      phone: user.phone,
-      photo: user.photo,
-      role: user.role,
-      isVerified: user.isVerified,
-      createDate: user.createDate,
       permissions: user.permissions
     };
 
@@ -746,9 +635,6 @@ const loginUser = async (req, res) => {
     } else if (user.role === 'operations' || user.role === 'warehouse') {
       userData.employeeId = user.employeeId;
       userData.department = user.department;
-      userData.createdBy = user.createdBy;
-    } else if (user.role === 'admin') {
-      userData.isAdmin = true;
     }
 
     res.status(200).json({
@@ -768,7 +654,7 @@ const loginUser = async (req, res) => {
   }
 };
 
-// ==================== PASSWORD RESET (All Roles) ====================
+// ==================== PASSWORD RESET ====================
 
 const forgotPassword = async (req, res) => {
   try {
@@ -781,28 +667,15 @@ const forgotPassword = async (req, res) => {
       });
     }
 
-    // Find verified user (any role)
     const user = await UserModel.findOne({ 
       email: email.toLowerCase(), 
       isVerified: true 
     });
 
     if (!user) {
-      // Don't reveal if user exists (security)
       return res.status(200).json({
         success: true,
         message: "If an account exists with this email, OTP will be sent"
-      });
-    }
-
-    // Check if last reset request was within 2 minutes
-    const lastResetAttempt = user.resetPasswordOTPExpires || user.updateDate;
-    const twoMinutesAgo = new Date(Date.now() - 120000);
-    
-    if (lastResetAttempt && lastResetAttempt > twoMinutesAgo) {
-      return res.status(429).json({
-        success: false,
-        message: "Please wait 2 minutes before requesting another password reset"
       });
     }
 
@@ -811,36 +684,21 @@ const forgotPassword = async (req, res) => {
     const otpExpiry = new Date();
     otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
 
-    // Save OTP
+    // Save OTP to user (temporary)
     user.resetPasswordOTP = otp;
     user.resetPasswordOTPExpires = otpExpiry;
     user.updateDate = new Date();
     await user.save();
 
-    // Send OTP via Email
-    try {
-      await sendPasswordResetOTPEmail(email, otp, user.firstName);
-      console.log(`✅ Password reset OTP sent to ${email}: ${otp}`);
-    } catch (emailError) {
-      console.error("❌ Password reset email failed:", emailError);
-      
-      // Development mode-এ কনসোলে OTP দেখাবে
-      console.log(`🔐 DEV MODE - Password reset OTP for ${email}: ${otp}`);
-      
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error("Failed to send password reset OTP");
-      }
-    }
+    // Send OTP
+    await sendPasswordResetOTPEmail(email, otp, user.firstName);
 
     res.status(200).json({
       success: true,
       message: "OTP sent to your email",
       data: {
         email: user.email,
-        role: user.role,
-        expiresAt: otpExpiry,
-        // Development mode-এ OTP রেসপন্সে পাঠান
-        ...(process.env.NODE_ENV === 'development' && { otp: otp })
+        expiresAt: otpExpiry
       }
     });
 
@@ -872,7 +730,6 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    // Find verified user (any role)
     const user = await UserModel.findOne({ 
       email: email.toLowerCase(), 
       isVerified: true 
@@ -885,16 +742,21 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    // Check OTP expiry
-    const now = new Date();
-    if (now > user.resetPasswordOTPExpires) {
+    // Check OTP
+    if (!user.resetPasswordOTP || !user.resetPasswordOTPExpires) {
+      return res.status(400).json({
+        success: false,
+        message: "No password reset request found"
+      });
+    }
+
+    if (new Date() > user.resetPasswordOTPExpires) {
       return res.status(400).json({
         success: false,
         message: "OTP expired. Please request a new one."
       });
     }
 
-    // Verify OTP
     if (user.resetPasswordOTP !== otp) {
       return res.status(400).json({
         success: false,
@@ -906,7 +768,7 @@ const resetPassword = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    // Update password and clear OTP
+    // Update password
     user.password = hashedPassword;
     user.resetPasswordOTP = undefined;
     user.resetPasswordOTPExpires = undefined;
@@ -915,11 +777,7 @@ const resetPassword = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Password reset successful. You can now login with your new password.",
-      data: {
-        email: user.email,
-        role: user.role
-      }
+      message: "Password reset successful"
     });
 
   } catch (error) {
@@ -936,9 +794,8 @@ const resetPassword = async (req, res) => {
 
 const getUserProfile = async (req, res) => {
   try {
-    const userId = req.user.userId; // From auth middleware
-
-    const user = await UserModel.findById(userId).select('-password -registrationOTP -registrationOTPExpires -resetPasswordOTP -resetPasswordOTPExpires');
+    const user = await UserModel.findById(req.user.userId)
+      .select('-password -registrationOTP -registrationOTPExpires -resetPasswordOTP -resetPasswordOTPExpires');
     
     if (!user) {
       return res.status(404).json({
@@ -967,7 +824,6 @@ const updateProfile = async (req, res) => {
     const userId = req.user.userId;
     const { firstName, lastName, phone, photo, companyName, companyAddress, companyVAT } = req.body;
 
-    // Get current user to check role
     const currentUser = await UserModel.findById(userId);
     if (!currentUser) {
       return res.status(404).json({
@@ -976,21 +832,20 @@ const updateProfile = async (req, res) => {
       });
     }
 
-    // Prepare update data
-    const updateData = {};
-    if (firstName !== undefined) updateData.firstName = firstName.trim();
-    if (lastName !== undefined) updateData.lastName = lastName.trim();
-    if (phone !== undefined) updateData.phone = phone.trim();
-    if (photo !== undefined) updateData.photo = photo;
+    const updateData = {
+      updateDate: new Date()
+    };
     
-    // Only customers can update company info
+    if (firstName) updateData.firstName = firstName.trim();
+    if (lastName) updateData.lastName = lastName.trim();
+    if (phone) updateData.phone = phone.trim();
+    if (photo) updateData.photo = photo;
+    
     if (currentUser.role === 'customer') {
-      if (companyName !== undefined) updateData.companyName = companyName.trim();
-      if (companyAddress !== undefined) updateData.companyAddress = companyAddress.trim();
-      if (companyVAT !== undefined) updateData.companyVAT = companyVAT.trim();
+      if (companyName) updateData.companyName = companyName.trim();
+      if (companyAddress) updateData.companyAddress = companyAddress.trim();
+      if (companyVAT) updateData.companyVAT = companyVAT.trim();
     }
-    
-    updateData.updateDate = new Date();
 
     const updatedUser = await UserModel.findByIdAndUpdate(
       userId,
@@ -1041,7 +896,6 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // Verify current password
     const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({
@@ -1050,7 +904,6 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // Check if new password is same as old password
     const isSamePassword = await bcrypt.compare(newPassword, user.password);
     if (isSamePassword) {
       return res.status(400).json({
@@ -1059,11 +912,9 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // Hash new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    // Update password
     user.password = hashedPassword;
     user.updateDate = new Date();
     await user.save();
@@ -1085,14 +936,10 @@ const changePassword = async (req, res) => {
 
 const logoutUser = async (req, res) => {
   try {
-    // In JWT, logout is handled client-side by removing token
-    // If using token blacklist, add token to blacklist here
-    
     res.status(200).json({
       success: true,
       message: "Logged out successfully"
     });
-
   } catch (error) {
     console.error("Logout error:", error);
     res.status(500).json({
@@ -1107,7 +954,6 @@ const logoutUser = async (req, res) => {
 
 const getAllUsers = async (req, res) => {
   try {
-    // Check if user is admin
     const requester = await UserModel.findById(req.user.userId);
     if (requester.role !== 'admin') {
       return res.status(403).json({
@@ -1140,7 +986,6 @@ const deleteUser = async (req, res) => {
   try {
     const { userId } = req.params;
     
-    // Check if requester is admin
     const requester = await UserModel.findById(req.user.userId);
     if (requester.role !== 'admin') {
       return res.status(403).json({
@@ -1149,7 +994,13 @@ const deleteUser = async (req, res) => {
       });
     }
 
-    // Check if user exists
+    if (req.user.userId === userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete your own account"
+      });
+    }
+
     const user = await UserModel.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -1158,16 +1009,7 @@ const deleteUser = async (req, res) => {
       });
     }
 
-    // Prevent self-deletion
-    if (req.user.userId === userId) {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot delete your own account"
-      });
-    }
-
-    // Prevent deleting other admins
-    if (user.role === 'admin' && req.user.userId !== userId) {
+    if (user.role === 'admin') {
       return res.status(400).json({
         success: false,
         message: "Cannot delete another admin"
@@ -1195,7 +1037,6 @@ const getUserById = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Check if requester is admin
     const requester = await UserModel.findById(req.user.userId);
     if (requester.role !== 'admin') {
       return res.status(403).json({
@@ -1234,7 +1075,6 @@ const updateUser = async (req, res) => {
     const { userId } = req.params;
     const updateData = req.body;
 
-    // Check if requester is admin
     const requester = await UserModel.findById(req.user.userId);
     if (requester.role !== 'admin') {
       return res.status(403).json({
@@ -1243,25 +1083,20 @@ const updateUser = async (req, res) => {
       });
     }
 
-    // Prevent updating certain fields
-    const restrictedFields = ['_id', 'password', 'email', 'createDate'];
-    restrictedFields.forEach(field => {
-      delete updateData[field];
-    });
+    const restrictedFields = ['_id', 'password', 'createDate'];
+    restrictedFields.forEach(field => delete updateData[field]);
 
-    // Check if user exists
-    const existingUser = await UserModel.findById(userId);
-    if (!existingUser) {
+    const user = await UserModel.findById(userId);
+    if (!user) {
       return res.status(404).json({
         success: false,
         message: "User not found"
       });
     }
 
-    // If updating email, check if email already exists
-    if (updateData.email && updateData.email !== existingUser.email) {
+    if (updateData.email && updateData.email !== user.email) {
       const emailExists = await UserModel.findOne({ 
-        email: updateData.email,
+        email: updateData.email.toLowerCase(),
         _id: { $ne: userId }
       });
       
@@ -1271,9 +1106,11 @@ const updateUser = async (req, res) => {
           message: "Email already exists"
         });
       }
+      updateData.email = updateData.email.toLowerCase();
     }
 
-    // Update user
+    updateData.updateDate = new Date();
+
     const updatedUser = await UserModel.findByIdAndUpdate(
       userId,
       { $set: updateData },
@@ -1300,7 +1137,6 @@ const getUsersByRole = async (req, res) => {
   try {
     const { role } = req.params;
 
-    // Check if requester is admin
     const requester = await UserModel.findById(req.user.userId);
     if (requester.role !== 'admin') {
       return res.status(403).json({
@@ -1309,7 +1145,6 @@ const getUsersByRole = async (req, res) => {
       });
     }
 
-    // Validate role
     const validRoles = ['admin', 'operations', 'warehouse', 'customer'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
@@ -1341,12 +1176,12 @@ const getUsersByRole = async (req, res) => {
 // ==================== EXPORTS ====================
 
 module.exports = {
-  // Customer Registration (OTP Based)
+  // Customer Registration (OTP Based - No DB save until verification)
   registerCustomerAndSendOTP,
-  verifyOTPAndCompleteRegistration,
+  verifyCustomerOTP,
   resendOTP,
   
-  // Staff Creation (Admin Only - No OTP)
+  // Staff Creation (Admin Only - Direct DB save)
   createStaff,
   
   // Admin Creation (Initial Setup)
@@ -1355,7 +1190,7 @@ module.exports = {
   // Auth
   loginUser,
   
-  // Password Reset (All Roles)
+  // Password Reset
   forgotPassword,
   resetPassword,
   

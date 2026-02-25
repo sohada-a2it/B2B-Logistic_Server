@@ -1,419 +1,810 @@
-// models/shipmentModel.js
 const mongoose = require('mongoose');
 
-const shipmentSchema = new mongoose.Schema({
-  // ==================== BASIC INFORMATION ====================
-  shipmentNumber: {
-    type: String,
-    required: [true, 'Shipment number is required'],
-    unique: true,
-    trim: true
-  },
-  trackingNumber: {
-    type: String,
-    unique: true,
-    trim: true
-  },
-  customer: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: [true, 'Customer is required']
-  },
-  customerName: {
-    type: String,
-    required: [true, 'Customer name is required'],
-    trim: true
-  },
-  customerEmail: {
-    type: String,
-    required: [true, 'Customer email is required'],
-    lowercase: true,
-    trim: true
-  },
-  
-  // ==================== SHIPMENT TYPE & DETAILS ====================
-  shipmentType: {
-    type: String,
-    enum: ['Air Freight', 'Sea Freight', 'Express Courier', 'Land Transport'],
-    required: [true, 'Shipment type is required'],
-    default: 'Sea Freight'
-  },
-  shippingMode: {
-    type: String,
-    enum: ['DDP', 'DDU', 'EXW', 'FOB', 'CIF'],
-    default: 'DDP'
-  },
-  
-  // ==================== ORIGIN & DESTINATION ====================
-  origin: {
-    country: {
-      type: String,
-      enum: ['China', 'Thailand', 'Vietnam', 'India', 'Other'],
-      required: [true, 'Origin country is required']
-    },
-    warehouse: {
-      type: String,
-      enum: ['China Warehouse', 'Thailand Warehouse', 'Vietnam Warehouse', 'Other'],
-      required: [true, 'Origin warehouse is required']
-    },
-    city: {
-      type: String,
-      trim: true
-    },
-    address: {
-      type: String,
-      trim: true
-    }
-  },
-  
-  destination: {
-    country: {
-      type: String,
-      enum: ['USA', 'UK', 'Canada', 'Australia', 'Germany', 'France', 'Japan', 'Other'],
-      required: [true, 'Destination country is required']
-    },
-    port: {
-      type: String,
-      trim: true
-    },
-    city: {
-      type: String,
-      required: [true, 'Destination city is required'],
-      trim: true
-    },
-    address: {
-      type: String,
-      trim: true
-    },
-    postalCode: {
-      type: String,
-      trim: true
-    }
-  },
-  
-  // ==================== CARGO DETAILS ====================
-  cargoDetails: {
-    numberOfCartons: {
-      type: Number,
-      required: [true, 'Number of cartons is required'],
-      min: 1
-    },
-    totalWeight: {
-      type: Number, // in kg
-      required: [true, 'Total weight is required'],
-      min: 0.1
-    },
-    totalVolume: {
-      type: Number, // in CBM
-      required: [true, 'Total volume is required'],
-      min: 0.001
-    },
-    productCategory: {
-      type: String,
-      enum: ['Electronics', 'Textiles', 'Machinery', 'Furniture', 'Food', 'Chemicals', 'Automotive', 'Pharmaceuticals', 'Other'],
-      required: [true, 'Product category is required']
-    },
-    description: {
-      type: String,
-      trim: true
-    },
-    dimensions: {
-      length: Number, // in cm
-      width: Number,  // in cm
-      height: Number, // in cm
-      unit: {
+// Enums
+const packagingTypes = [
+    'Pallet', 'Carton', 'Crate', 'Wooden Box', 'Container', 
+    'Envelope', 'Loose Cargo', 'Loose Tires', '20FT Container', '40FT Container'
+];
+
+const shipmentModes = [
+    'Sea Freight', 'Air Freight', 'Inland Trucking', 'Multimodal'
+];
+
+const shipmentTypes = [
+    'Sea Freight (FCL)', 'Sea Freight (LCL)', 'Air Freight', 
+    'Rail Freight', 'Express Delivery', 'Inland Transport', 'Door to Door'
+];
+
+const shipmentStatuses = [
+    'Pending',
+    'Picked Up from Warehouse',
+    'Departed Port of Origin',
+    'In Transit (Sea Freight)',
+    'Arrived at Destination Port',
+    'Customs Cleared',
+    'Out for Delivery',
+    'Delivered',
+    'On Hold',
+    'Cancelled',
+    'Returned'
+];
+
+const paymentModes = [
+    'Bank Transfer', 'Credit Card', 'Cash', 'Wire Transfer'
+];
+
+// Package Schema
+const packageSchema = new mongoose.Schema({
+    packageType: {
         type: String,
-        enum: ['cm', 'm', 'in', 'ft'],
-        default: 'cm'
-      }
-    }
-  },
-  
-  // ==================== CONTAINER/AIRWAY DETAILS ====================
-  containerDetails: {
-    containerId: {
-      type: String,
-      trim: true
+        enum: packagingTypes,
+        required: true
     },
-    containerType: {
-      type: String,
-      enum: ['20FT', '40FT', '40FT HC', '45FT HC', 'LCL', 'Airway Bill']
+    quantity: {
+        type: Number,
+        required: true,
+        min: 1
     },
-    airwayBillNumber: {
-      type: String,
-      trim: true
+    description: String,
+    weight: {
+        type: Number,
+        required: true,
+        min: 0
     },
-    vesselFlightNumber: {
-      type: String,
-      trim: true
-    }
-  },
-  
-  // ==================== DATES ====================
-  bookingDate: {
-    type: Date,
-    default: Date.now
-  },
-  estimatedDeparture: {
-    type: Date
-  },
-  actualDeparture: {
-    type: Date
-  },
-  estimatedArrival: {
-    type: Date
-  },
-  actualArrival: {
-    type: Date
-  },
-  deliveryDate: {
-    type: Date
-  },
-  
-  // ==================== STATUS & MILESTONES ====================
-  currentStatus: {
-    type: String,
-    enum: [
-      'Booking Requested',
-      'Confirmed',
-      'Received at Warehouse',
-      'Consolidation in Progress',
-      'Loaded in Container/Flight',
-      'In Transit',
-      'Arrived at Destination',
-      'Customs Clearance',
-      'Out for Delivery',
-      'Delivered',
-      'Cancelled',
-      'On Hold'
-    ],
-    default: 'Booking Requested'
-  },
-  
-  milestones: [{
+    volume: {
+        type: Number,
+        required: true,
+        min: 0
+    },
+    length: Number,
+    width: Number,
+    height: Number,
+    marksAndNumbers: String,
+    hsCode: String,
+    declaredValue: Number,
+    currency: {
+        type: String,
+        enum: ['USD', 'GBP', 'CAD', 'THB', 'CNY'],
+        default: 'USD'
+    },
+    sealNumber: String,
+    containerNumber: String,
+    warehouseLocation: String,
+    condition: {
+        type: String,
+        enum: ['Excellent', 'Good', 'Fair', 'Damaged'],
+        default: 'Good'
+    },
+    inspectionNotes: String,
+    photos: [String]
+});
+
+// Milestone Schema
+const milestoneSchema = new mongoose.Schema({
     status: {
-      type: String,
-      required: true
-    },
-    date: {
-      type: Date,
-      default: Date.now
+        type: String,
+        enum: shipmentStatuses,
+        required: true
     },
     location: {
-      type: String,
-      trim: true
+        type: String,
+        required: true
     },
-    notes: {
-      type: String,
-      trim: true
+    description: String,
+    timestamp: {
+        type: Date,
+        default: Date.now
     },
     updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    documents: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Document'
+    }],
+    delayReason: String,
+    estimatedCompletionTime: Date,
+    actualCompletionTime: Date,
+    metadata: mongoose.Schema.Types.Mixed
+});
+
+// FCL Container Schema
+const fclContainerSchema = new mongoose.Schema({
+    containerNumber: {
+        type: String,
+        required: true
+    },
+    containerType: {
+        type: String,
+        enum: ['20FT', '40FT', '40FT HC', '45FT'],
+        required: true
+    },
+    sealNumber: String,
+    weight: Number,
+    volume: Number,
+    packages: [packageSchema],
+    stuffingDate: Date,
+    stuffingLocation: String,
+    stuffingCompletedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    isStuffed: {
+        type: Boolean,
+        default: false
+    },
+    stuffingNotes: String,
+    containerCondition: String,
+    photos: [String]
+});
+
+// LCL Cargo Schema
+const lclCargoSchema = new mongoose.Schema({
+    consolidationId: String,
+    packages: [packageSchema],
+    warehouseReceipt: String,
+    palletId: String,
+    storageLocation: String,
+    receivedDate: Date,
+    receivedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    shippedDate: Date,
+    shippingNotes: String
+});
+
+// Transport Details Schema
+const transportDetailsSchema = new mongoose.Schema({
+    mode: {
+        type: String,
+        enum: shipmentModes,
+        required: true
+    },
+    shipmentType: {
+        type: String,
+        enum: shipmentTypes,
+        required: true
+    },
+    carrierName: String,
+    carrierCode: String,
+    
+    // Air Freight
+    flightNumber: String,
+    airline: String,
+    airwayBillNumber: String,
+    masterAirwayBill: String,
+    airportOfDeparture: String,
+    airportOfArrival: String,
+    
+    // Sea Freight
+    vesselName: String,
+    voyageNumber: String,
+    billOfLading: String,
+    masterBillOfLading: String,
+    portOfLoading: String,
+    portOfDischarge: String,
+    shippingLine: String,
+    bookingNumber: String,
+    
+    // Rail Freight
+    trainNumber: String,
+    railCompany: String,
+    railWaybill: String,
+    railTerminalOrigin: String,
+    railTerminalDestination: String,
+    railWagonNumber: String,
+    
+    // Inland Trucking
+    truckNumber: String,
+    trailerNumber: String,
+    driverName: String,
+    driverContact: String,
+    transportCompany: String,
+    truckingCompany: String,
+    route: String,
+    
+    // Dates
+    estimatedDeparture: Date,
+    estimatedArrival: Date,
+    actualDeparture: Date,
+    actualArrival: Date,
+    
+    // Location
+    currentLocation: {
+        lat: Number,
+        lng: Number,
+        address: String,
+        city: String,
+        country: String,
+        lastUpdated: Date
+    },
+    
+    transitNotes: String,
+    delayReasons: [String],
+    routeMap: String,
+    stops: [{
+        location: String,
+        arrivalTime: Date,
+        departureTime: Date,
+        notes: String
+    }]
+});
+
+// Cost Schema
+const costSchema = new mongoose.Schema({
+    costType: {
+        type: String,
+        enum: [
+            'Freight Cost', 'Handling Fee', 'Warehouse Fee', 'Customs Processing Fee',
+            'Documentation Fee', 'Insurance', 'Fuel Surcharge', 'Port Charges',
+            'Terminal Handling', 'Inland Transportation', 'Door Delivery', 'Packaging Fee',
+            'Storage Fee', 'Demurrage', 'Detention', 'Other'
+        ],
+        required: true
+    },
+    description: String,
+    amount: {
+        type: Number,
+        required: true,
+        min: 0
+    },
+    currency: {
+        type: String,
+        enum: ['USD', 'GBP', 'CAD', 'THB', 'CNY'],
+        default: 'USD'
+    },
+    paidBy: {
+        type: String,
+        enum: ['Shipper', 'Consignee', 'Third Party'],
+        default: 'Shipper'
+    },
+    invoiceReference: String,
+    paymentStatus: {
+        type: String,
+        enum: ['Pending', 'Paid', 'Overdue', 'Cancelled'],
+        default: 'Pending'
+    },
+    dueDate: Date,
+    paymentDate: Date,
+    paymentMode: {
+        type: String,
+        enum: paymentModes
+    },
+    transactionReference: String,
+    notes: String
+});
+
+// Main Shipment Schema
+const shipmentSchema = new mongoose.Schema({
+    // Identification
+    shipmentNumber: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    bookingId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Booking',
+        required: true
+    },
+    trackingNumber: {
+        type: String,
+        unique: true,
+        sparse: true
+    },
+    referenceNumber: String,
+    
+    // Status
+    status: {
+        type: String,
+        enum: shipmentStatuses,
+        default: 'Pending'
+    },
+    
+    // Classification
+    mode: {
+        type: String,
+        enum: shipmentModes,
+        required: true
+    },
+    shipmentType: {
+        type: String,
+        enum: shipmentTypes,
+        required: true
+    },
+    
+    // Parties
+    shipper: {
+        name: { type: String, required: true },
+        company: String,
+        address: String,
+        city: String,
+        country: String,
+        contactPerson: String,
+        phone: String,
+        email: String,
+        taxId: String
+    },
+    consignee: {
+        name: { type: String, required: true },
+        company: String,
+        address: String,
+        city: String,
+        country: String,
+        contactPerson: String,
+        phone: String,
+        email: String,
+        taxId: String
+    },
+    notifyParty: {
+        name: String,
+        company: String,
+        address: String,
+        contactPerson: String,
+        phone: String,
+        email: String
+    },
+    
+    // Routes
+    origin: {
+        location: { type: String, required: true },
+        port: String,
+        warehouse: String,
+        address: String,
+        city: String,
+        country: String,
+        departureDate: Date
+    },
+    destination: {
+        location: { type: String, required: true },
+        port: String,
+        warehouse: String,
+        address: String,
+        city: String,
+        country: String,
+        arrivalDate: Date
+    },
+    
+    // Package Details
+    packages: [packageSchema],
+    totalPackages: {
+        type: Number,
+        default: 0
+    },
+    totalWeight: {
+        type: Number,
+        default: 0
+    },
+    totalVolume: {
+        type: Number,
+        default: 0
+    },
+    packagingSummary: {
+        byType: [{
+            type: String,
+            count: Number,
+            weight: Number,
+            volume: Number
+        }]
+    },
+    
+    // Container Details
+    fclContainers: [fclContainerSchema],
+    lclCargo: lclCargoSchema,
+    
+    // Transport
+    transport: transportDetailsSchema,
+    
+    // Milestones
+    milestones: [milestoneSchema],
+    currentMilestone: {
+        type: String,
+        enum: shipmentStatuses
+    },
+    
+    // Documents
+    documents: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Document'
+    }],
+    requiredDocuments: [{
+        documentType: String,
+        status: {
+            type: String,
+            enum: ['Required', 'Uploaded', 'Approved', 'Rejected'],
+            default: 'Required'
+        },
+        uploadedAt: Date,
+        uploadedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }
+    }],
+    
+    // Costs
+    costs: [costSchema],
+    totalCost: {
+        type: Number,
+        default: 0
+    },
+    totalPaid: {
+        type: Number,
+        default: 0
+    },
+    balanceDue: {
+        type: Number,
+        default: 0
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['Unpaid', 'Partially Paid', 'Paid', 'Overdue'],
+        default: 'Unpaid'
+    },
+    paymentTerms: String,
+    
+    // Customs
+    customsInfo: {
+        entryNumber: String,
+        bondNumber: String,
+        brokerName: String,
+        brokerContact: String,
+        clearanceDate: Date,
+        customsValue: Number,
+        dutiesAmount: Number,
+        dutiesCurrency: String,
+        dutiesPaid: Boolean,
+        holds: [{
+            reason: String,
+            placedBy: String,
+            placedDate: Date,
+            resolvedDate: Date,
+            resolvedBy: String
+        }],
+        inspectionRequired: Boolean,
+        inspectionDate: Date,
+        inspectionResult: String,
+        notes: String
+    },
+    
+    // Insurance
+    insurance: {
+        policyNumber: String,
+        provider: String,
+        coverageAmount: Number,
+        currency: String,
+        premium: Number,
+        validFrom: Date,
+        validTo: Date,
+        status: {
+            type: String,
+            enum: ['Not Insured', 'Insured', 'Expired', 'Claimed'],
+            default: 'Not Insured'
+        },
+        claims: [{
+            claimNumber: String,
+            date: Date,
+            amount: Number,
+            reason: String,
+            status: String,
+            resolution: String
+        }]
+    },
+    
+    // Tracking
+    trackingUpdates: [{
+        location: String,
+        status: String,
+        description: String,
+        timestamp: Date,
+        source: String,
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }
+    }],
+    
+    // Alerts
+    alerts: [{
+        type: {
+            type: String,
+            enum: ['Delay', 'Damage', 'Customs Hold', 'Weather', 'Document Issue', 'Other']
+        },
+        severity: {
+            type: String,
+            enum: ['Low', 'Medium', 'High', 'Critical']
+        },
+        message: String,
+        triggeredAt: Date,
+        acknowledgedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        acknowledgedAt: Date,
+        resolvedAt: Date,
+        resolvedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }
+    }],
+    
+    // Assignment
+    assignedTo: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    assignedTeam: String,
+    
+    // Dates
+    shipmentDate: Date,
+    promisedDeliveryDate: Date,
+    actualDeliveryDate: Date,
+    createdDate: {
+        type: Date,
+        default: Date.now
+    },
+    lastUpdated: {
+        type: Date,
+        default: Date.now
+    },
+    
+    // Audit
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    updatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    
+    // Notes
+    specialInstructions: String,
+    internalNotes: [{
+        text: String,
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        createdAt: {
+            type: Date,
+            default: Date.now
+        },
+        isPrivate: Boolean
+    }],
+    customerNotes: [{
+        text: String,
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        createdAt: Date,
+        isRead: Boolean
+    }],
+    
+    // Quality Control
+    qualityChecks: [{
+        checkType: String,
+        passed: Boolean,
+        checkedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        checkedAt: Date,
+        notes: String,
+        photos: [String]
+    }],
+    
+    // Cancellation/Return
+    cancellation: {
+        reason: String,
+        requestedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        requestedAt: Date,
+        approvedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        approvedAt: Date,
+        refundAmount: Number,
+        notes: String
+    },
+    returnInfo: {
+        reason: String,
+        authorizationNumber: String,
+        requestedAt: Date,
+        pickupDate: Date,
+        pickupAddress: String,
+        returnedBy: String,
+        receivedAt: Date,
+        receivedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        condition: String,
+        restockingFee: Number,
+        notes: String
+    },
+    
+    // Metadata
+    tags: [String],
+    version: {
+        type: Number,
+        default: 1
     }
-  }],
-  
-  // ==================== ASSIGNED STAFF ====================
-  assignedTo: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  assignedOperator: {
-    type: String,
-    trim: true
-  },
-  
-  // ==================== PICKUP & DELIVERY ====================
-  pickupRequired: {
-    type: Boolean,
-    default: false
-  },
-  pickupDetails: {
-    date: Date,
-    time: String,
-    address: String,
-    contactPerson: String,
-    contactPhone: String
-  },
-  
-  deliveryDetails: {
-    date: Date,
-    time: String,
-    address: String,
-    contactPerson: String,
-    contactPhone: String,
-    deliveryNotes: String
-  },
-  
-  // ==================== FINANCIAL DETAILS ====================
-  quotationAmount: {
-    type: Number,
-    default: 0
-  },
-  invoiceAmount: {
-    type: Number,
-    default: 0
-  },
-  currency: {
-    type: String,
-    enum: ['USD', 'GBP', 'CAD', 'EUR', 'THB', 'CNY'],
-    default: 'USD'
-  },
-  paymentStatus: {
-    type: String,
-    enum: ['Pending', 'Quoted', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'],
-    default: 'Pending'
-  },
-  
-  // ==================== DOCUMENTS ====================
-  documents: [{
-    documentType: {
-      type: String,
-      enum: ['Commercial Invoice', 'Packing List', 'Shipping Label', 'Customs Document', 'Bill of Lading', 'Airway Bill', 'Certificate of Origin', 'Insurance', 'Other']
-    },
-    documentName: String,
-    documentUrl: String,
-    uploadedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    uploadedAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  
-  // ==================== WAREHOUSE DETAILS ====================
-  warehouse: {
-    warehouseId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Warehouse'
-    },
-    locationCode: String,
-    receivingDate: Date,
-    storageLocation: String
-  },
-  
-  // ==================== CUSTOMS & COMPLIANCE ====================
-  customsInfo: {
-    hsCode: String,
-    value: Number,
-    dutiesPaid: {
-      type: Boolean,
-      default: false
-    },
-    clearanceDate: Date,
-    clearanceNotes: String
-  },
-  
-  // ==================== NOTES & COMMUNICATION ====================
-  internalNotes: [{
-    note: String,
-    addedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    addedAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  
-  customerNotes: String,
-  
-  // ==================== SYSTEM FIELDS ====================
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  updatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  lastUpdated: {
-    type: Date,
-    default: Date.now
-  }
 }, {
-  timestamps: true
+    timestamps: true
 });
 
-// Indexes for faster queries
-shipmentSchema.index({ shipmentNumber: 1 }, { unique: true });
-shipmentSchema.index({ trackingNumber: 1 }, { unique: true, sparse: true });
-shipmentSchema.index({ customer: 1 });
-shipmentSchema.index({ currentStatus: 1 });
-shipmentSchema.index({ 'origin.country': 1, 'destination.country': 1 });
-shipmentSchema.index({ bookingDate: -1 });
-shipmentSchema.index({ assignedTo: 1 });
-
-// Pre-save middleware to generate shipment number
-// models/shipmentModel.js - pre-save middleware আপডেট করুন
-
-// পরিবর্তন করুন এই অংশ:
+// Pre-save middleware
 shipmentSchema.pre('save', async function(next) {
-  if (this.isNew) {
-    // Generate shipment number: SH-YYYYMMDD-XXXXX
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const randomNum = Math.floor(10000 + Math.random() * 90000);
-    this.shipmentNumber = `SH-${year}${month}${day}-${randomNum}`;
-    
-    // Generate tracking number if not provided
-    if (!this.trackingNumber) {
-      this.trackingNumber = `TRK-${year}${month}${day}-${Math.floor(100000 + Math.random() * 900000)}`;
+    if (!this.shipmentNumber) {
+        const date = new Date();
+        const year = date.getFullYear().toString().slice(-2);
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const count = await mongoose.model('Shipment').countDocuments();
+        const modePrefix = this.mode === 'Sea Freight' ? 'SEA' :
+                          this.mode === 'Air Freight' ? 'AIR' :
+                          this.mode === 'Inland Trucking' ? 'TRK' : 'MLT';
+        this.shipmentNumber = `${modePrefix}-${year}${month}-${(count + 1).toString().padStart(6, '0')}`;
     }
-  }
-  this.lastUpdated = new Date();
-  next();
-});
-
-// পরিবর্তন করুন এভাবে:
-shipmentSchema.pre('validate', function(next) {
-  // Only generate for new documents
-  if (this.isNew) {
-    // Generate shipment number: SH-YYYYMMDD-XXXXX
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const randomNum = Math.floor(10000 + Math.random() * 90000);
-    this.shipmentNumber = `SH-${year}${month}${day}-${randomNum}`;
     
-    // Generate tracking number
-    this.trackingNumber = `TRK-${year}${month}${day}-${Math.floor(100000 + Math.random() * 900000)}`;
-  }
-  next();
+    if (!this.trackingNumber) {
+        const random = Math.random().toString(36).substring(2, 10).toUpperCase();
+        this.trackingNumber = `TRK-${random}`;
+    }
+    
+    // Calculate totals
+    if (this.packages && this.packages.length > 0) {
+        this.totalPackages = this.packages.reduce((sum, pkg) => sum + pkg.quantity, 0);
+        this.totalWeight = this.packages.reduce((sum, pkg) => sum + (pkg.weight * pkg.quantity), 0);
+        this.totalVolume = this.packages.reduce((sum, pkg) => sum + (pkg.volume * pkg.quantity), 0);
+    }
+    
+    // Calculate costs
+    if (this.costs && this.costs.length > 0) {
+        this.totalCost = this.costs.reduce((sum, cost) => sum + cost.amount, 0);
+        this.totalPaid = this.costs
+            .filter(cost => cost.paymentStatus === 'Paid')
+            .reduce((sum, cost) => sum + cost.amount, 0);
+        this.balanceDue = this.totalCost - this.totalPaid;
+        
+        if (this.totalPaid === 0) {
+            this.paymentStatus = 'Unpaid';
+        } else if (this.totalPaid >= this.totalCost) {
+            this.paymentStatus = 'Paid';
+        } else if (this.totalPaid > 0 && this.totalPaid < this.totalCost) {
+            this.paymentStatus = 'Partially Paid';
+        }
+    }
+    
+    this.lastUpdated = new Date();
+    next();
 });
 
-shipmentSchema.pre('save', function(next) {
-  this.lastUpdated = new Date();
-  next();
-});
-
-// Method to add milestone
-shipmentSchema.methods.addMilestone = function(status, location, notes, updatedBy) {
-  this.milestones.push({
-    status,
-    location,
-    notes,
-    updatedBy,
-    date: new Date()
-  });
-  this.currentStatus = status;
-  return this.save();
+// Instance methods
+shipmentSchema.methods.updateStatus = function(status, userId, location, description) {
+    this.status = status;
+    this.currentMilestone = status;
+    
+    this.milestones.push({
+        status,
+        location: location || this.transport?.currentLocation?.address || 'Unknown',
+        description,
+        updatedBy: userId,
+        timestamp: new Date()
+    });
+    
+    this.trackingUpdates.push({
+        location: location || this.transport?.currentLocation?.address || 'Unknown',
+        status,
+        description,
+        timestamp: new Date(),
+        createdBy: userId
+    });
+    
+    switch(status) {
+        case 'Picked Up from Warehouse':
+            this.origin.departureDate = new Date();
+            break;
+        case 'Delivered':
+            this.actualDeliveryDate = new Date();
+            break;
+        case 'Customs Cleared':
+            if (this.customsInfo) {
+                this.customsInfo.clearanceDate = new Date();
+            }
+            break;
+    }
 };
 
-// Method to check if shipment belongs to customer
-shipmentSchema.methods.isCustomerShipment = function(customerId) {
-  return this.customer.toString() === customerId.toString();
+shipmentSchema.methods.addTrackingUpdate = function(location, status, description, userId) {
+    this.trackingUpdates.push({
+        location,
+        status,
+        description,
+        timestamp: new Date(),
+        createdBy: userId
+    });
+    
+    if (this.transport) {
+        this.transport.currentLocation = {
+            address: location,
+            lastUpdated: new Date()
+        };
+    }
 };
+
+shipmentSchema.methods.addCost = function(costData) {
+    this.costs.push(costData);
+    this.totalCost = this.costs.reduce((sum, cost) => sum + cost.amount, 0);
+    this.totalPaid = this.costs
+        .filter(cost => cost.paymentStatus === 'Paid')
+        .reduce((sum, cost) => sum + cost.amount, 0);
+    this.balanceDue = this.totalCost - this.totalPaid;
+};
+
+shipmentSchema.methods.isOnTrack = function() {
+    const delayedStatuses = ['On Hold', 'Cancelled', 'Returned'];
+    if (delayedStatuses.includes(this.status)) return false;
+    
+    if (this.transport?.estimatedArrival) {
+        const now = new Date();
+        if (this.transport.estimatedArrival < now && this.status !== 'Delivered') {
+            return false;
+        }
+    }
+    
+    return true;
+};
+
+shipmentSchema.methods.getETA = function() {
+    return this.transport?.estimatedArrival || this.promisedDeliveryDate;
+};
+
+shipmentSchema.methods.getProgressPercentage = function() {
+    const statusOrder = [
+        'Pending',
+        'Picked Up from Warehouse',
+        'Departed Port of Origin',
+        'In Transit (Sea Freight)',
+        'Arrived at Destination Port',
+        'Customs Cleared',
+        'Out for Delivery',
+        'Delivered'
+    ];
+    
+    const currentIndex = statusOrder.indexOf(this.status);
+    if (currentIndex === -1) return 0;
+    return Math.round((currentIndex / (statusOrder.length - 1)) * 100);
+};
+
+shipmentSchema.methods.getCustomerTimeline = function() {
+    return this.milestones
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .map(m => ({
+            status: m.status,
+            location: m.location,
+            date: m.timestamp,
+            description: m.description
+        }));
+};
+
+// Indexes
+shipmentSchema.index({ shipmentNumber: 1 });
+shipmentSchema.index({ trackingNumber: 1 });
+shipmentSchema.index({ bookingId: 1 });
+shipmentSchema.index({ status: 1 });
+shipmentSchema.index({ mode: 1 });
+shipmentSchema.index({ shipmentType: 1 });
+shipmentSchema.index({ 'origin.country': 1, 'destination.country': 1 });
+shipmentSchema.index({ 'transport.estimatedArrival': 1 });
+shipmentSchema.index({ paymentStatus: 1 });
+shipmentSchema.index({ createdDate: -1 });
+shipmentSchema.index({ assignedTo: 1 });
 
 module.exports = mongoose.model('Shipment', shipmentSchema);
