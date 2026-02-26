@@ -285,12 +285,14 @@ exports.updateBooking = async (req, res) => {
     }
 };
 
+// controllers/bookingController.js - Update the updateBookingStatus function
+
 // @desc    Update booking status
 // @route   PATCH /api/bookings/:id/status
 // @access  Private (Operations Staff, Warehouse Manager)
 exports.updateBookingStatus = async (req, res) => {
     try {
-        const { status, location, description } = req.body;
+        const { status, location, description, generateTrackingNumber } = req.body;
         
         const booking = await Booking.findById(req.params.id);
 
@@ -326,19 +328,73 @@ exports.updateBookingStatus = async (req, res) => {
             });
         }
 
+        // Generate tracking number if requested and status is booking_confirmed
+        if (generateTrackingNumber && status === 'booking_confirmed' && !booking.trackingNumber) {
+            // Generate tracking number based on shipment type
+            const shipmentType = booking.shipmentDetails?.shipmentType || 'express_courier';
+            
+            // Create prefix based on shipment type
+            let prefix;
+            switch(shipmentType) {
+                case 'air_freight':
+                    prefix = 'AF';
+                    break;
+                case 'sea_freight':
+                    prefix = 'SF';
+                    break;
+                case 'express_courier':
+                    prefix = 'EX';
+                    break;
+                default:
+                    prefix = 'BK';
+            }
+            
+            // Generate random alphanumeric part (8 characters)
+            const random = Math.random().toString(36).substring(2, 10).toUpperCase();
+            
+            // Add timestamp for uniqueness (last 4 digits of timestamp)
+            const timestamp = Date.now().toString().slice(-4);
+            
+            // Combine to create tracking number
+            booking.trackingNumber = `${prefix}-${random}${timestamp}`;
+            
+            // Add timeline entry for tracking number generation
+            booking.timeline.push({
+                status: booking.status,
+                description: `Tracking number ${booking.trackingNumber} generated`,
+                updatedBy: req.user.id,
+                timestamp: new Date()
+            });
+            
+            console.log(`Tracking number generated for booking ${booking.bookingNumber}: ${booking.trackingNumber}`);
+        }
+
+        // Store old status for logging
+        const oldStatus = booking.status;
+
         // Update status with timeline entry
         booking.updateStatus(status, req.user.id, location, description);
+        
+        // Save the booking
         await booking.save();
 
+        // Populate references
         await booking.populate([
-            { path: 'customer', select: 'companyName' },
-            { path: 'assignedTo', select: 'name email' }
+            { path: 'customer', select: 'companyName contactPerson email' },
+            { path: 'assignedTo', select: 'name email' },
+            { path: 'createdBy', select: 'name email' }
         ]);
+
+        // Prepare success message
+        let successMessage = `Booking status updated from ${oldStatus} to ${status}`;
+        if (booking.trackingNumber && oldStatus !== status) {
+            successMessage += ` with tracking number: ${booking.trackingNumber}`;
+        }
 
         res.json({
             success: true,
             data: booking,
-            message: `Booking status updated to ${status}`
+            message: successMessage
         });
 
     } catch (error) {
@@ -739,6 +795,394 @@ exports.trackBooking = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error tracking booking',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Hard delete booking (Permanent deletion)
+// @route   DELETE /api/bookings/:id/hard-delete
+// @access  Private (Admin Only)
+exports.hardDeleteBooking = async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: 'Booking not found'
+            });
+        }
+
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Only admins can perform hard delete'
+            });
+        }
+
+        // Optional: Add confirmation check
+        const { confirm } = req.query;
+        if (confirm !== 'true') {
+            return res.status(400).json({
+                success: false,
+                message: 'Please confirm hard deletion with confirm=true query parameter'
+            });
+        }
+
+        // Store booking info for response before deletion
+        const deletedBookingInfo = {
+            id: booking._id,
+            bookingNumber: booking.bookingNumber,
+            trackingNumber: booking.trackingNumber,
+            customer: booking.customer,
+            status: booking.status
+        };
+
+        // Hard delete from database
+        await Booking.findByIdAndDelete(req.params.id);
+
+        // Log the deletion for audit trail (optional)
+        console.log(`Booking hard deleted by admin ${req.user.id}:`, deletedBookingInfo);
+
+        res.json({
+            success: true,
+            data: deletedBookingInfo,
+            message: `Booking ${booking.bookingNumber} has been permanently deleted from the database`
+        });
+
+    } catch (error) {
+        console.error('Hard delete booking error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error permanently deleting booking',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Bulk hard delete bookings (Permanent deletion)
+// @route   DELETE /api/bookings/bulk-hard-delete
+// @access  Private (Admin Only)
+exports.bulkHardDeleteBookings = async (req, res) => {
+    try {
+        const { bookingIds } = req.body;
+
+        if (!bookingIds || !Array.isArray(bookingIds) || bookingIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide an array of booking IDs to delete'
+            });
+        }
+
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Only admins can perform hard delete'
+            });
+        }
+
+        // Optional: Add confirmation check
+        const { confirm } = req.query;
+        if (confirm !== 'true') {
+            return res.status(400).json({
+                success: false,
+                message: 'Please confirm hard deletion with confirm=true query parameter'
+            });
+        }
+
+        // Get bookings info before deletion for response
+        const bookingsToDelete = await Booking.find({ 
+            _id: { $in: bookingIds } 
+        }).select('bookingNumber trackingNumber status');
+
+        // Perform hard delete
+        const result = await Booking.deleteMany({ 
+            _id: { $in: bookingIds } 
+        });
+
+        res.json({
+            success: true,
+            data: {
+                deletedCount: result.deletedCount,
+                deletedBookings: bookingsToDelete.map(b => ({
+                    id: b._id,
+                    bookingNumber: b.bookingNumber,
+                    trackingNumber: b.trackingNumber,
+                    status: b.status
+                }))
+            },
+            message: `Successfully deleted ${result.deletedCount} bookings permanently from the database`
+        });
+
+    } catch (error) {
+        console.error('Bulk hard delete bookings error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error performing bulk hard delete',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Soft delete booking (Move to trash)
+// @route   DELETE /api/bookings/:id
+// @access  Private (Admin, Operations Staff)
+exports.deleteBooking = async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: 'Booking not found'
+            });
+        }
+
+        // Check authorization
+        if (req.user.role === 'customer') {
+            return res.status(403).json({
+                success: false,
+                message: 'Customers cannot delete bookings'
+            });
+        }
+
+        // Check if booking can be deleted (only certain statuses)
+        const deletableStatuses = ['booking_requested', 'booking_confirmed', 'cancelled'];
+        if (!deletableStatuses.includes(booking.status) && req.user.role !== 'admin') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete booking in ${booking.status} status. Only admins can delete active bookings.`
+            });
+        }
+
+        // Soft delete - add deleted flag and timestamp
+        booking.isDeleted = true;
+        booking.deletedAt = new Date();
+        booking.deletedBy = req.user.id;
+        booking.deletionReason = req.body.reason || 'No reason provided';
+        
+        await booking.save();
+
+        res.json({
+            success: true,
+            data: {
+                id: booking._id,
+                bookingNumber: booking.bookingNumber,
+                deletedAt: booking.deletedAt
+            },
+            message: `Booking ${booking.bookingNumber} has been moved to trash`
+        });
+
+    } catch (error) {
+        console.error('Soft delete booking error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error deleting booking',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Restore soft-deleted booking
+// @route   POST /api/bookings/:id/restore
+// @access  Private (Admin, Operations Staff)
+exports.restoreBooking = async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: 'Booking not found'
+            });
+        }
+
+        if (!booking.isDeleted) {
+            return res.status(400).json({
+                success: false,
+                message: 'Booking is not deleted'
+            });
+        }
+
+        // Restore booking
+        booking.isDeleted = false;
+        booking.deletedAt = null;
+        booking.deletedBy = null;
+        booking.deletionReason = null;
+        booking.restoredAt = new Date();
+        booking.restoredBy = req.user.id;
+        
+        // Add timeline entry for restoration
+        booking.timeline.push({
+            status: booking.status,
+            description: 'Booking restored from trash',
+            updatedBy: req.user.id,
+            timestamp: new Date()
+        });
+
+        await booking.save();
+
+        res.json({
+            success: true,
+            data: booking,
+            message: `Booking ${booking.bookingNumber} has been restored successfully`
+        });
+
+    } catch (error) {
+        console.error('Restore booking error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error restoring booking',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Get deleted bookings (trash)
+// @route   GET /api/bookings/deleted/trash
+// @access  Private (Admin, Operations Staff)
+exports.getDeletedBookings = async (req, res) => {
+    try {
+        const {
+            page = 1,
+            limit = 10,
+            startDate,
+            endDate,
+            search
+        } = req.query;
+
+        // Build filter for deleted bookings
+        let filter = { isDeleted: true };
+
+        // Only admins can see all deleted bookings
+        if (req.user.role !== 'admin') {
+            filter.deletedBy = req.user.id;
+        }
+
+        // Date range filter for deletion date
+        if (startDate || endDate) {
+            filter.deletedAt = {};
+            if (startDate) filter.deletedAt.$gte = new Date(startDate);
+            if (endDate) filter.deletedAt.$lte = new Date(endDate);
+        }
+
+        // Search by booking number or tracking number
+        if (search) {
+            filter.$or = [
+                { bookingNumber: new RegExp(search, 'i') },
+                { trackingNumber: new RegExp(search, 'i') }
+            ];
+        }
+
+        // Pagination
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const deletedBookings = await Booking.find(filter)
+            .populate('customer', 'companyName')
+            .populate('deletedBy', 'name email')
+            .sort({ deletedAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await Booking.countDocuments(filter);
+
+        // Get deletion statistics
+        const stats = await Booking.aggregate([
+            { $match: { isDeleted: true } },
+            {
+                $group: {
+                    _id: null,
+                    totalDeleted: { $sum: 1 },
+                    byAdmin: {
+                        $sum: {
+                            $cond: [
+                                { $eq: ['$deletedBy.role', 'admin'] },
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    byStaff: {
+                        $sum: {
+                            $cond: [
+                                { $ne: ['$deletedBy.role', 'admin'] },
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        res.json({
+            success: true,
+            data: deletedBookings,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / parseInt(limit))
+            },
+            stats: stats[0] || {},
+            message: 'Deleted bookings retrieved successfully'
+        });
+
+    } catch (error) {
+        console.error('Get deleted bookings error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving deleted bookings',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Empty trash (permanently delete all soft-deleted bookings)
+// @route   DELETE /api/bookings/empty-trash
+// @access  Private (Admin Only)
+exports.emptyTrash = async (req, res) => {
+    try {
+        // Check if user is admin
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Only admins can empty trash'
+            });
+        }
+
+        // Optional: Add confirmation check
+        const { confirm } = req.query;
+        if (confirm !== 'true') {
+            return res.status(400).json({
+                success: false,
+                message: 'Please confirm emptying trash with confirm=true query parameter. This action is irreversible!'
+            });
+        }
+
+        // Get count before deletion
+        const count = await Booking.countDocuments({ isDeleted: true });
+
+        // Permanently delete all soft-deleted bookings
+        const result = await Booking.deleteMany({ isDeleted: true });
+
+        res.json({
+            success: true,
+            data: {
+                deletedCount: result.deletedCount,
+                totalInTrash: count
+            },
+            message: `Successfully emptied trash. ${result.deletedCount} bookings permanently deleted.`
+        });
+
+    } catch (error) {
+        console.error('Empty trash error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error emptying trash',
             error: error.message
         });
     }

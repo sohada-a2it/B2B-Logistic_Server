@@ -65,7 +65,14 @@ router.get('/stats/dashboard',protect, adminOnly, bookingController.getBookingSt
 router.post('/bulk-booking-update',protect, adminOnly, bookingController.bulkUpdateBookings);  
 router.get('/getBooking-by-id/:id',protect, bookingController.getBookingById);
 router.put('/updateBooking-by-id/:id',protect, adminOnly, bookingController.updateBooking);
-// router.delete('/deleteBooking-by-id/:id',protect, adminOnly, bookingController.deleteBooking); 
+router.delete('/booking/:id/hard-delete', protect, adminOnly, bookingController.hardDeleteBooking);
+router.delete('/booking/bulk-hard-delete', protect, adminOnly, bookingController.bulkHardDeleteBookings);
+
+// Soft delete and restore routes
+router.delete('/booking/:id', protect, bookingController.deleteBooking); // Soft delete
+router.post('/booking/:id/restore', protect, bookingController.restoreBooking);
+router.get('/booking/deleted/trash', protect, bookingController.getDeletedBookings);
+router.delete('/booking/empty-trash', protect, adminOnly, bookingController.emptyTrash);
 router.patch('/booking/:id/status',protect, adminOnly, bookingController.updateBookingStatus); 
 router.post('/booking/:id/assign',protect, adminOnly, bookingController.assignBooking); 
 router.post('/booking/:id/notes',protect, bookingController.addBookingNote); 
@@ -77,7 +84,7 @@ router.get('/booking/:id/timeline',protect, bookingController.getBookingTimeline
 router.get('/shipping/:trackingNumber',protect, shipmentController.trackShipment);  
 router.get('/shipping/stats/dashboard',protect, adminOnly, shipmentController.getShipmentStats); 
 router.get('/getshipping/',protect, shipmentController.getAllShipments);  
-router.post('/crateshipping/',protect, adminOnly, shipmentController.createShipment);  
+router.post('/createShipment',protect, adminOnly, shipmentController.createShipment);  
 router.get('/shipping/:id', shipmentController.getShipmentById);
 router.put('/shipping/:id', adminOnly, shipmentController.updateShipment);
 router.delete('/shipping/:id', adminOnly, shipmentController.deleteShipment); 

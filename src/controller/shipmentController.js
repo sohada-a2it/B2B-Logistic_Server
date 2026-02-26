@@ -6,87 +6,69 @@ const Booking = require('../models/shipmentModel');
 // @access  Private
 exports.createShipment = async (req, res) => {
     try {
-        const booking = await Booking.findById(req.body.bookingId);
-        if (!booking) {
-            return res.status(404).json({
-                success: false,
-                message: 'Booking not found'
-            });
-        }
-
-        const existingShipment = await Shipment.findOne({ bookingId: req.body.bookingId });
-        if (existingShipment) {
+        console.log('========== CREATE SHIPMENT DEBUG ==========');
+        console.log('1. Full request body:', JSON.stringify(req.body, null, 2));
+        console.log('2. req.body.bookingId:', req.body.bookingId);
+        console.log('3. Type of bookingId:', typeof req.body.bookingId);
+        
+        // Check if bookingId exists
+        if (!req.body.bookingId) {
+            console.log('4. ERROR: No bookingId in request body');
             return res.status(400).json({
                 success: false,
-                message: 'Shipment already exists for this booking'
+                message: 'bookingId is required',
+                receivedBody: req.body
             });
         }
 
-        const shipmentData = {
-            ...req.body,
-            shipper: {
-                name: booking.customer?.companyName || 'N/A',
-                company: booking.customer?.companyName,
-                address: booking.pickupAddress?.addressLine1,
-                city: booking.pickupAddress?.city,
-                country: booking.pickupAddress?.country,
-                contactPerson: booking.customer?.contactPerson,
-                phone: booking.customer?.phone,
-                email: booking.customer?.email
-            },
-            consignee: {
-                name: booking.deliveryAddress?.consigneeName,
-                company: booking.deliveryAddress?.companyName,
-                address: booking.deliveryAddress?.addressLine1,
-                city: booking.deliveryAddress?.city,
-                country: booking.deliveryAddress?.country,
-                contactPerson: booking.deliveryAddress?.consigneeName,
-                phone: booking.deliveryAddress?.phone,
-                email: booking.deliveryAddress?.email
-            },
-            origin: {
-                location: booking.shipmentDetails?.origin,
-                address: booking.pickupAddress?.addressLine1,
-                city: booking.pickupAddress?.city,
-                country: booking.pickupAddress?.country
-            },
-            destination: {
-                location: booking.shipmentDetails?.destination,
-                address: booking.deliveryAddress?.addressLine1,
-                city: booking.deliveryAddress?.city,
-                country: booking.deliveryAddress?.country
-            },
-            packages: req.body.packages || [{
-                packageType: 'Carton',
-                quantity: booking.shipmentDetails?.totalCartons || 1,
-                weight: booking.shipmentDetails?.totalWeight || 0,
-                volume: booking.shipmentDetails?.totalVolume || 0,
-                description: booking.shipmentDetails?.cargoDetails?.[0]?.description || 'General Cargo'
-            }],
-            createdBy: req.user.id
-        };
-
-        const shipment = await Shipment.create(shipmentData);
+        // Try to find the booking
+        console.log('5. Attempting to find booking with ID:', req.body.bookingId);
         
-        booking.status = 'booking_confirmed';
-        await booking.save();
+        const booking = await Booking.findById(req.body.bookingId);
+        
+        console.log('6. Booking found:', booking ? 'YES' : 'NO');
+        
+        if (!booking) {
+            // Try to find by other possible ID fields
+            console.log('7. Trying to find by other ID fields...');
+            
+            // Try as string
+            const bookingAsString = await Booking.findById(String(req.body.bookingId));
+            console.log('8. As string found:', bookingAsString ? 'YES' : 'NO');
+            
+            // Try to find by bookingNumber if it was sent instead of _id
+            const bookingByNumber = await Booking.findOne({ bookingNumber: req.body.bookingId });
+            console.log('9. By bookingNumber found:', bookingByNumber ? 'YES' : 'NO');
+            
+            return res.status(404).json({
+                success: false,
+                message: 'Booking not found',
+                debug: {
+                    receivedBookingId: req.body.bookingId,
+                    bookingIdType: typeof req.body.bookingId,
+                    bookingIdValue: req.body.bookingId,
+                    searchedBy: '_id'
+                }
+            });
+        }
 
-        await shipment.populate([
-            { path: 'bookingId', select: 'bookingNumber' },
-            { path: 'createdBy', select: 'name email' }
-        ]);
-
-        res.status(201).json({
-            success: true,
-            data: shipment,
-            message: 'Shipment created successfully'
+        console.log('10. Booking found successfully:', {
+            id: booking._id,
+            bookingNumber: booking.bookingNumber,
+            customer: booking.customer?.companyName
         });
 
+        // Rest of your code...
+        const existingShipment = await Shipment.findOne({ bookingId: req.body.bookingId });
+        // ... rest of your logic
+
     } catch (error) {
+        console.error('ERROR in createShipment:', error);
         res.status(500).json({
             success: false,
             message: 'Error creating shipment',
-            error: error.message
+            error: error.message,
+            stack: error.stack
         });
     }
 };
