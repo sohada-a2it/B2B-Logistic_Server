@@ -1,24 +1,38 @@
 const mongoose = require('mongoose');
 
+// Enums
+const shipmentTypes = ['air_freight', 'sea_freight', 'express_courier'];
+const origins = ['China Warehouse', 'Thailand Warehouse'];
+const destinations = ['USA', 'UK', 'Canada'];
+const shippingModes = ['DDP', 'DDU', 'FOB', 'CIF'];
+const bookingStatuses = [
+    'booking_requested',
+    'price_quoted',
+    'booking_confirmed',
+    'cancelled',
+    'rejected'
+];
+
+// Cargo Item Schema
 const cargoItemSchema = new mongoose.Schema({
     description: {
         type: String,
-        required: true
+        required: [true, 'Cargo description is required']
     },
     cartons: {
         type: Number,
         required: true,
-        min: 1
+        min: [1, 'Minimum 1 carton required']
     },
     weight: {
         type: Number,
         required: true,
-        min: 0
+        min: [0, 'Weight cannot be negative']
     },
     volume: {
         type: Number,
         required: true,
-        min: 0
+        min: [0, 'Volume cannot be negative']
     },
     productCategory: {
         type: String,
@@ -35,109 +49,18 @@ const cargoItemSchema = new mongoose.Schema({
     }
 });
 
-const pickupAddressSchema = new mongoose.Schema({
-    companyName: String,
-    contactPerson: String,
-    phone: String,
-    addressLine1: String,
-    addressLine2: String,
-    city: String,
-    state: String,
-    country: String,
-    postalCode: String,
-    pickupDate: Date,
-    pickupTime: String,
-    specialInstructions: String
-});
-
-const deliveryAddressSchema = new mongoose.Schema({
-    consigneeName: {
-        type: String,
-        required: true
-    },
-    companyName: String,
-    phone: String,
-    email: String,
-    addressLine1: {
-        type: String,
-        required: true
-    },
-    addressLine2: String,
-    city: {
-        type: String,
-        required: true
-    },
-    state: String,
-    country: {
-        type: String,
-        required: true
-    },
-    postalCode: String,
-    isResidential: {
-        type: Boolean,
-        default: false
-    }
-});
-
-const shipmentDetailsSchema = new mongoose.Schema({
-    shipmentType: {
-        type: String,
-        enum: ['air_freight', 'sea_freight', 'express_courier'],
-        required: true
-    },
-    origin: {
-        type: String,
-        enum: ['China Warehouse', 'Thailand Warehouse'],
-        required: true
-    },
-    destination: {
-        type: String,
-        enum: ['USA', 'UK', 'Canada'],
-        required: true
-    },
-    shippingMode: {
-        type: String,
-        enum: ['DDP', 'DDU', 'FOB', 'CIF'],
-        default: 'DDU'
-    },
-    pickupRequired: {
-        type: Boolean,
-        default: false
-    },
-    cargoDetails: [cargoItemSchema],
-    totalCartons: Number,
-    totalWeight: Number,
-    totalVolume: Number,
-    specialInstructions: String,
-    referenceNumber: String,
-    incoterms: String
-});
-
+// Timeline Entry Schema
 const timelineEntrySchema = new mongoose.Schema({
     status: {
         type: String,
-        enum: [
-            'booking_requested',
-            'booking_confirmed',
-            'pickup_scheduled',
-            'received_at_warehouse',
-            'consolidation_in_progress',
-            'loaded_in_container',
-            'loaded_on_flight',
-            'in_transit',
-            'arrived_at_destination',
-            'customs_clearance',
-            'out_for_delivery',
-            'delivered',
-            'cancelled',
-            'returned'
-        ]
+        enum: bookingStatuses,
+        required: true
     },
-    location: String,
     description: String,
     updatedBy: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+        ref: 'User',
+        required: true
     },
     timestamp: {
         type: Date,
@@ -146,11 +69,12 @@ const timelineEntrySchema = new mongoose.Schema({
     metadata: mongoose.Schema.Types.Mixed
 });
 
+// Main Booking Schema
 const bookingSchema = new mongoose.Schema({
     // Booking Identification
     bookingNumber: {
-        type: String, 
-        unique: true
+        type: String,
+        unique: true, 
     },
     trackingNumber: {
         type: String,
@@ -158,111 +82,175 @@ const bookingSchema = new mongoose.Schema({
         sparse: true
     },
     
-    // Customer Information
+    // Relationships
     customer: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Customer', 
+        ref: 'User',
+        required: [true, 'Customer is required']
     },
-    customerReference: String,
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
     
     // Shipment Details
-    shipmentDetails: shipmentDetailsSchema,
+    shipmentDetails: {
+        shipmentType: {
+            type: String,
+            enum: shipmentTypes,
+            required: true
+        },
+        origin: {
+            type: String,
+            enum: origins,
+            required: true
+        },
+        destination: {
+            type: String,
+            enum: destinations,
+            required: true
+        },
+        shippingMode: {
+            type: String,
+            enum: shippingModes,
+            default: 'DDU'
+        },
+        pickupRequired: {
+            type: Boolean,
+            default: false
+        },
+        cargoDetails: [cargoItemSchema],
+        totalCartons: {
+            type: Number,
+            default: 0
+        },
+        totalWeight: {
+            type: Number,
+            default: 0
+        },
+        totalVolume: {
+            type: Number,
+            default: 0
+        },
+        specialInstructions: String,
+        referenceNumber: String
+    },
     
     // Address Information
-    pickupAddress: pickupAddressSchema,
-    deliveryAddress: deliveryAddressSchema,
+    pickupAddress: {
+        companyName: String,
+        contactPerson: String,
+        phone: String,
+        addressLine1: String,
+        addressLine2: String,
+        city: String,
+        state: String,
+        country: String,
+        postalCode: String,
+        pickupDate: Date,
+        specialInstructions: String
+    },
+    deliveryAddress: {
+        consigneeName: {
+            type: String,
+            required: true
+        },
+        companyName: String,
+        phone: String,
+        email: String,
+        addressLine1: {
+            type: String,
+            required: true
+        },
+        addressLine2: String,
+        city: {
+            type: String,
+            required: true
+        },
+        state: String,
+        country: {
+            type: String,
+            required: true
+        },
+        postalCode: String
+    },
     
     // Status Management
     status: {
         type: String,
-        enum: [
-            'booking_requested',
-            'booking_confirmed',
-            'pickup_scheduled',
-            'received_at_warehouse',
-            'consolidation_in_progress',
-            'loaded_in_container',
-            'loaded_on_flight',
-            'in_transit',
-            'arrived_at_destination',
-            'customs_clearance',
-            'out_for_delivery',
-            'delivered',
-            'cancelled',
-            'returned'
-        ],
+        enum: bookingStatuses,
         default: 'booking_requested'
+    },
+    
+    // Pricing Section
+    pricingStatus: {
+        type: String,
+        enum: ['pending', 'quoted', 'accepted', 'rejected', 'expired'],
+        default: 'pending'
+    },
+    
+    quotedPrice: {
+        amount: {
+            type: Number,
+            min: 0
+        },
+        currency: {
+            type: String,
+            enum: ['USD', 'GBP', 'CAD', 'THB', 'CNY'],
+            default: 'USD'
+        },
+        breakdown: {
+            freightCost: { type: Number, default: 0 },
+            handlingFee: { type: Number, default: 0 },
+            warehouseFee: { type: Number, default: 0 },
+            customsFee: { type: Number, default: 0 },
+            insurance: { type: Number, default: 0 },
+            otherCharges: { type: Number, default: 0 }
+        },
+        quotedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        quotedAt: Date,
+        validUntil: Date,
+        notes: String
+    },
+    
+    // Customer Response
+    customerResponse: {
+        status: {
+            type: String,
+            enum: ['pending', 'accepted', 'rejected']
+        },
+        respondedAt: Date,
+        notes: String,
+        ipAddress: String
     },
     
     // Timeline
     timeline: [timelineEntrySchema],
     
     // Dates
-    requestedPickupDate: Date,
-    estimatedDepartureDate: Date,
-    estimatedArrivalDate: Date,
-    actualPickupDate: Date,
-    actualDeliveryDate: Date,
+    requestedDate: {
+        type: Date,
+        default: Date.now
+    },
+    confirmedAt: Date,
+    cancelledAt: Date,
+    cancellationReason: String,
     
-    // Shipment Assignment
-    assignedTo: {
+    // References
+    shipmentId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+        ref: 'Shipment'
     },
-    containerId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Container'
-    },
-    airwayBillNumber: String,
-    billOfLading: String,
-    
-    // Warehouse Information
-    warehouseLocation: {
-        type: String,
-        enum: ['China Warehouse', 'Thailand Warehouse']
-    },
-    warehouseReceiptDate: Date,
-    warehouseLocationBin: String,
-    
-    // Pricing & Quotes
-    quotedAmount: {
-        type: Number,
-        min: 0
-    },
-    quotedCurrency: {
-        type: String,
-        enum: ['USD', 'GBP', 'CAD', 'THB', 'CNY'],
-        default: 'USD'
-    },
-    
-    // Documents
-    documents: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Document'
-    }],
-    
-    // Invoice Reference
     invoiceId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Invoice'
     },
     
-    // Tracking Updates
-    lastTrackingUpdate: Date,
-    currentLocation: {
-        city: String,
-        country: String,
-        coordinates: {
-            lat: Number,
-            lng: Number
-        }
-    },
-    
-    // Audit Fields
-    createdBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User', 
-    },
+    // Audit
     updatedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -274,114 +262,64 @@ const bookingSchema = new mongoose.Schema({
     updatedAt: {
         type: Date,
         default: Date.now
-    },
-    
-    // Cancellation/Return Details
-    cancellationReason: String,
-    cancelledBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-    },
-    cancelledAt: Date,
-    
-    // Additional Fields
-    tags: [String],
-    notes: [{
-        text: String,
-        createdBy: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        },
-        createdAt: {
-            type: Date,
-            default: Date.now
-        }
-    }]
+    }
+}, {
+    timestamps: true
 });
 
-// Generate unique booking number before saving
+// Pre-save middleware to generate booking number
 bookingSchema.pre('save', async function(next) {
     if (!this.bookingNumber) {
         const date = new Date();
         const year = date.getFullYear().toString().slice(-2);
         const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const count = await mongoose.model('Booking').countDocuments();
+        
+        // Count bookings for this month
+        const count = await mongoose.model('Booking').countDocuments({
+            bookingNumber: new RegExp(`^BKG-${year}${month}`)
+        });
+        
         this.bookingNumber = `BKG-${year}${month}-${(count + 1).toString().padStart(5, '0')}`;
     }
     
-    // Generate tracking number if not exists and status is confirmed
-    if (this.status === 'booking_confirmed' && !this.trackingNumber) {
-        const prefix = this.shipmentDetails.shipmentType === 'air_freight' ? 'AF' : 
-                      this.shipmentDetails.shipmentType === 'sea_freight' ? 'SF' : 'EX';
-        const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-        this.trackingNumber = `${prefix}-${random}`;
+    // Calculate totals
+    if (this.shipmentDetails.cargoDetails && this.shipmentDetails.cargoDetails.length > 0) {
+        this.shipmentDetails.totalCartons = this.shipmentDetails.cargoDetails.reduce(
+            (sum, item) => sum + item.cartons, 0
+        );
+        this.shipmentDetails.totalWeight = this.shipmentDetails.cargoDetails.reduce(
+            (sum, item) => sum + (item.weight * item.cartons), 0
+        );
+        this.shipmentDetails.totalVolume = this.shipmentDetails.cargoDetails.reduce(
+            (sum, item) => sum + (item.volume * item.cartons), 0
+        );
     }
     
     this.updatedAt = Date.now();
     next();
 });
 
-// Method to update status with timeline entry
-bookingSchema.methods.updateStatus = function(status, userId, location, description) {
-    this.status = status;
+// Methods
+bookingSchema.methods.addTimelineEntry = function(status, description, userId, metadata = {}) {
     this.timeline.push({
         status,
-        location,
         description,
         updatedBy: userId,
-        timestamp: new Date()
+        timestamp: new Date(),
+        metadata
     });
-    
-    // Update relevant date fields based on status
-    switch(status) {
-        case 'received_at_warehouse':
-            this.warehouseReceiptDate = new Date();
-            break;
-        case 'delivered':
-            this.actualDeliveryDate = new Date();
-            break;
-        case 'cancelled':
-            this.cancelledAt = new Date();
-            break;
-    }
 };
 
-// Method to calculate total shipment value
-bookingSchema.methods.calculateTotalValue = function() {
-    return this.shipmentDetails.cargoDetails.reduce((total, item) => {
-        return total + (item.value?.amount || 0);
-    }, 0);
+bookingSchema.methods.isQuoteValid = function() {
+    if (!this.quotedPrice || !this.quotedPrice.validUntil) return false;
+    return new Date() <= this.quotedPrice.validUntil;
 };
 
-// Method to get shipment progress percentage
-bookingSchema.methods.getProgressPercentage = function() {
-    const statusOrder = [
-        'booking_requested',
-        'booking_confirmed',
-        'pickup_scheduled',
-        'received_at_warehouse',
-        'consolidation_in_progress',
-        'loaded_in_container',
-        'loaded_on_flight',
-        'in_transit',
-        'arrived_at_destination',
-        'customs_clearance',
-        'out_for_delivery',
-        'delivered'
-    ];
-    
-    const currentIndex = statusOrder.indexOf(this.status);
-    if (currentIndex === -1) return 0;
-    return Math.round((currentIndex / (statusOrder.length - 1)) * 100);
-};
-
-// Indexes for better query performance
+// Indexes
 bookingSchema.index({ bookingNumber: 1 });
 bookingSchema.index({ trackingNumber: 1 });
 bookingSchema.index({ customer: 1, createdAt: -1 });
-bookingSchema.index({ status: 1 });
+bookingSchema.index({ status: 1, pricingStatus: 1 });
 bookingSchema.index({ 'shipmentDetails.origin': 1, 'shipmentDetails.destination': 1 });
-bookingSchema.index({ estimatedDepartureDate: 1 });
-bookingSchema.index({ estimatedArrivalDate: 1 });
 
 module.exports = mongoose.model('Booking', bookingSchema);

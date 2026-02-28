@@ -33,68 +33,71 @@ router.put("/admin/updateUsers/:userId", protect, adminOnly, userController.upda
 router.delete("/admin/users/:userId", protect, adminOnly, userController.deleteUser);
 
 // booking
-// Validation rules for creating/updating booking
-// ==================== Validation rules ====================
-const bookingValidationRules = [
-    body('shipmentDetails.shipmentType')
-        .isIn(['air_freight', 'sea_freight', 'express_courier'])
-        .withMessage('Invalid shipment type'),
-    body('shipmentDetails.origin')
-        .isIn(['China Warehouse', 'Thailand Warehouse'])
-        .withMessage('Invalid origin'),
-    body('shipmentDetails.destination')
-        .isIn(['USA', 'UK', 'Canada'])
-        .withMessage('Invalid destination'),
-    body('deliveryAddress.consigneeName')
-        .notEmpty()
-        .withMessage('Consignee name is required'),
-    body('deliveryAddress.addressLine1')
-        .notEmpty()
-        .withMessage('Delivery address is required'),
-    body('shipmentDetails.cargoDetails')
-        .isArray({ min: 1 })
-        .withMessage('At least one cargo item is required')
-];
+// Public tracking (no auth required)
+router.get('/track/:trackingNumber', bookingController.trackByNumber); 
 
-// ==================== Public Routes ==================== 
-router.get('/booking/:trackingNumber', bookingController.trackBooking); 
-// ==================== Protected Routes ====================  
-router.get('/all-bookings',protect ,bookingController.getBookings); 
-router.post('/create-bookings',protect, bookingValidationRules, bookingController.createBooking);   
-router.get('/stats/dashboard',protect, adminOnly, bookingController.getBookingStats); 
-router.post('/bulk-booking-update',protect, adminOnly, bookingController.bulkUpdateBookings);  
-router.get('/getBooking-by-id/:id',protect, bookingController.getBookingById);
-router.put('/updateBooking-by-id/:id',protect, adminOnly, bookingController.updateBooking);
-router.delete('/booking/:id/hard-delete', protect, adminOnly, bookingController.hardDeleteBooking);
-router.delete('/booking/bulk-hard-delete', protect, adminOnly, bookingController.bulkHardDeleteBookings);
+// Customer routes
+router.post('/createBooking',protect, bookingController.createBooking); 
 
-// Soft delete and restore routes
-router.delete('/booking/:id', protect, bookingController.deleteBooking); // Soft delete
-router.post('/booking/:id/restore', protect, bookingController.restoreBooking);
-router.get('/booking/deleted/trash', protect, bookingController.getDeletedBookings);
-router.delete('/booking/empty-trash', protect, adminOnly, bookingController.emptyTrash);
-router.patch('/booking/:id/status',protect, adminOnly, bookingController.updateBookingStatus); 
-router.post('/booking/:id/assign',protect, adminOnly, bookingController.assignBooking); 
-router.post('/booking/:id/notes',protect, bookingController.addBookingNote); 
-router.post('/booking/:id/cancel',protect, bookingController.cancelBooking); 
-router.get('/booking/:id/timeline',protect, bookingController.getBookingTimeline);
- 
+// Admin/Staff routes
+router.get('/getAllBooking', protect, adminOnly, bookingController.getAllBookings);
+router.get('/getBookingById/:id', bookingController.getBookingById);
+router.put('/booking/:id/price-quote', protect, adminOnly, bookingController.updatePriceQuote);
+
+// Customer response routes
+router.put('/booking/:id/accept',protect, adminOnly, bookingController.acceptQuote);
+router.put('/booking/:id/reject',protect, adminOnly, bookingController.rejectQuote);
+router.put('/booking/:id/cancel', bookingController.cancelBooking); // Both customer and admin
+router.get('/my-bookings', protect, bookingController.getMyBookings);
+
+router.get('/my-bookings/summary',protect, bookingController.getMyBookingsSummary);
+
+router.get('/my-bookings/:id', protect, bookingController.getMyBookingById);
+
+router.get('/my-bookings/:id/timeline',protect,  bookingController.getMyBookingTimeline);
+
+router.get('/my-bookings/:id/invoice', protect,  bookingController.getMyBookingInvoices);
+
+router.get('/my-bookings/:id/quote', protect,  bookingController.getMyBookingQuote);  
 // shipment
 // ==================== PUBLIC ROUTES ==================== 
-router.get('/shipping/:trackingNumber',protect, shipmentController.trackShipment);  
-router.get('/shipping/stats/dashboard',protect, adminOnly, shipmentController.getShipmentStats); 
-router.get('/getshipping/',protect, shipmentController.getAllShipments);  
-router.post('/createShipment',protect, adminOnly, shipmentController.createShipment);  
-router.get('/shipping/:id', shipmentController.getShipmentById);
-router.put('/shipping/:id', adminOnly, shipmentController.updateShipment);
-router.delete('/shipping/:id', adminOnly, shipmentController.deleteShipment); 
-router.patch('/shipping/:id/status', adminOnly, shipmentController.updateShipmentStatus); 
-router.post('/shipping/:id/tracking', adminOnly, shipmentController.addTrackingUpdate); 
-router.post('/shipping/:id/costs',protect, adminOnly, shipmentController.addCost); 
-router.post('/shipping/:id/assign',protect, adminOnly, shipmentController.assignShipment); 
-router.post('/shipping/:id/documents',protect, adminOnly, shipmentController.addDocument); 
-router.post('/shipping/:id/notes/internal',protect, adminOnly, shipmentController.addInternalNote);
-router.post('/shipping/:id/notes/customer',protect, shipmentController.addCustomerNote); 
-router.get('/shipping/:id/timeline',protect, shipmentController.getShipmentTimeline); 
-router.post('/shipping/:id/cancel',protect, shipmentController.cancelShipment);
+// ========== PUBLIC TRACKING (No Auth Required) ==========
+router.get('/track/:trackingNumber',protect, shipmentController.trackByNumber); 
+
+// ========== CUSTOMER ROUTES ==========
+router.get('/my-shipments',protect,  shipmentController.getMyShipments); // কাস্টমারের নিজের shipment দেখা
+router.get('/my-shipments/:id',protect,  shipmentController.getMyShipmentById); // কাস্টমারের নিজের shipment details
+router.get('/my-shipments/:id/timeline',protect,  shipmentController.getMyShipmentTimeline); // কাস্টমারের নিজের timeline
+
+// ========== COMMON ROUTES (Accessible by multiple roles) ==========
+router.get('/stats/dashboard', protect, shipmentController.getShipmentStatistics); // Admin/Operations দেখতে পারবে
+router.get('/:id',protect,  shipmentController.getShipmentById); // সবাই দেখতে পারে (permission inside controller)
+router.get('/:id/timeline',protect,  shipmentController.getShipmentTimeline); // সবাই দেখতে পারে
+
+// ========== ADMIN + OPERATIONS ROUTES ==========
+router.get('/getAllShipment',protect,  adminOnly, shipmentController.getAllShipments); // সব shipments দেখা
+router.post('/create',protect,  adminOnly, shipmentController.createShipment); // নতুন shipment create
+router.put('/:id',protect,  adminOnly, shipmentController.updateShipment); // shipment update
+router.delete('/:id',protect,  adminOnly, shipmentController.deleteShipment); // shipment delete
+router.patch('/:id/status',protect,  adminOnly, shipmentController.updateShipmentStatus); // status update
+router.post('/:id/tracking',protect,  adminOnly, shipmentController.addTrackingUpdate); // tracking update
+router.post('/:id/assign',protect,  adminOnly, shipmentController.assignShipment); // assign to staff
+router.post('/:id/transport',protect,  adminOnly, shipmentController.updateTransportDetails); // transport details
+router.post('/:id/documents',protect,  adminOnly, shipmentController.addDocument); // documents add
+router.post('/:id/notes/internal',protect,  adminOnly, shipmentController.addInternalNote); // internal notes
+router.post('/:id/cancel',protect,  adminOnly, shipmentController.cancelShipment); // cancel shipment
+
+// ========== COSTS ROUTES (Finance/Admin) ==========
+router.post('/:id/costs',protect,  adminOnly, shipmentController.addCost); // add cost
+router.get('/:id/costs',protect,  adminOnly, shipmentController.getShipmentCosts); // get costs
+router.put('/:id/costs/:costId',protect,  adminOnly, shipmentController.updateCost); // update cost
+router.delete('/:id/costs/:costId',protect,  adminOnly, shipmentController.deleteCost); // delete cost
+
+// ========== WAREHOUSE ROUTES ==========
+// router.get('/warehouse/pending',protect,  warehouseOnly, shipmentController.getPendingWarehouseShipments); // pending warehouse shipments
+// router.patch('/:id/warehouse/receive',protect,  warehouseOnly, shipmentController.receiveAtWarehouse); // receive at warehouse
+// router.patch('/:id/warehouse/process',protect,  warehouseOnly, shipmentController.processWarehouse); // warehouse processing
+
+// ========== NOTES ROUTES ==========
+router.post('/:id/notes/customer', protect, shipmentController.addCustomerNote); // customer notes (customer+admin)
 module.exports = router;
