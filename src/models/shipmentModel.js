@@ -164,18 +164,63 @@ const shipmentSchema = new mongoose.Schema({
         type: String,
         enum: shipmentStatuses
     },
-    
-    // Warehouse
-    warehouseInfo: {
-        location: String,
-        receivedDate: Date,
-        receivedBy: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        },
-        shippedDate: Date,
-        storageLocation: String
+     
+
+warehouseInfo: {
+    receivedDate: Date,
+    receivedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
     },
+    location: String,
+    receiptId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'WarehouseReceipt'
+    },
+    notes: String
+},
+
+consolidationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Consolidation'
+},
+
+internalNotes: [{
+    note: String,
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    createdAt: Date
+}],
+
+customerNotes: [{
+    note: String,
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    createdAt: Date
+}],
+
+costs: [{
+    type: {
+        type: String,
+        enum: ['freight', 'handling', 'warehouse', 'customs', 'insurance', 'other']
+    },
+    amount: Number,
+    currency: { type: String, default: 'USD' },
+    description: String,
+    vendor: String,
+    incurredBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    incurredAt: Date
+}],
+
+cancelledAt: Date,
+cancellationReason: String,
     
     // Documents
     documents: [{

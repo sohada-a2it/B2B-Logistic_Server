@@ -299,3 +299,85 @@ module.exports = {
   sendWelcomeEmail: (email, name) => 
     emailService.sendWelcomeEmail(email, name)
 };
+const warehouseTemplates = {
+    'shipment-received-warehouse': (data) => ({
+        subject: '📦 Your Shipment Has Reached Our Warehouse',
+        html: `
+            <h2>Hello ${data.customerName},</h2>
+            <p>Good news! Your shipment has arrived at our warehouse.</p>
+            
+            <h3>Shipment Details:</h3>
+            <ul>
+                <li><strong>Tracking Number:</strong> ${data.trackingNumber}</li>
+                <li><strong>Receipt Number:</strong> ${data.receiptNumber}</li>
+                <li><strong>Received Date:</strong> ${data.receivedDate}</li>
+                <li><strong>Packages:</strong> ${data.packages}</li>
+                <li><strong>Condition:</strong> ${data.condition}</li>
+            </ul>
+            
+            <p>Next step: Your shipment will be processed and consolidated for shipping.</p>
+            
+            <p>
+                <a href="${data.trackingUrl}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+                    Track Your Shipment
+                </a>
+            </p>
+            
+            <p>Thank you for choosing Cargo Logistics!</p>
+        `
+    }),
+
+    'warehouse-receipt-notification': (data) => ({
+        subject: '📦 Shipment Received at Warehouse',
+        html: `
+            <h2>Warehouse Receipt Generated</h2>
+            
+            <p><strong>Tracking Number:</strong> ${data.trackingNumber}</p>
+            <p><strong>Customer:</strong> ${data.customerName}</p>
+            <p><strong>Receipt Number:</strong> ${data.receiptNumber}</p>
+            <p><strong>Warehouse:</strong> ${data.warehouseId}</p>
+            
+            <p>
+                <a href="${data.dashboardUrl}">View in Dashboard</a>
+            </p>
+        `
+    }),
+
+    'consolidation-ready': (data) => ({
+        subject: '🚢 Consolidation Ready for Departure',
+        html: `
+            <h2>Consolidation Ready for Departure</h2>
+            
+            <p><strong>Consolidation Number:</strong> ${data.consolidationNumber}</p>
+            <p><strong>Container Number:</strong> ${data.containerNumber}</p>
+            <p><strong>Total Shipments:</strong> ${data.totalShipments}</p>
+            
+            <p>
+                <a href="${data.dashboardUrl}">View Consolidation Details</a>
+            </p>
+        `
+    }),
+
+    'shipment-departed': (data) => ({
+        subject: '🚢 Your Shipment Is On The Way!',
+        html: `
+            <h2>Hello ${data.customerName},</h2>
+            <p>Great news! Your shipment has departed and is now in transit.</p>
+            
+            <h3>Shipment Details:</h3>
+            <ul>
+                <li><strong>Tracking Number:</strong> ${data.trackingNumber}</li>
+                <li><strong>Transport Mode:</strong> ${data.transportMode}</li>
+                <li><strong>Estimated Arrival:</strong> ${data.estimatedArrival}</li>
+            </ul>
+            
+            <p>
+                <a href="${data.trackingUrl}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+                    Track Your Shipment
+                </a>
+            </p>
+            
+            <p>We'll keep you updated on the progress!</p>
+        `
+    })
+};

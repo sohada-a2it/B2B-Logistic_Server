@@ -4,15 +4,16 @@ const userController = require("../controller/userController");
 const { protect, adminOnly } = require("../middleware/AuthVerifyMiddleWare"); 
 const bookingController = require('../controller/bookingController');
 const shipmentController = require('../controller/shipmentController');
+const warehouseController = require('../controller/warehouseController');
 const { body } = require('express-validator');
 // ==================== PUBLIC ROUTES (No Authentication Needed) ==================== 
-router.post("/login", userController.loginUser);  //all roles can login through this route
-router.post("/customer/register", userController.registerCustomerAndSendOTP);  // customer  
+router.post("/login", userController.loginUser);  
+router.post("/customer/register", userController.registerCustomerAndSendOTP);  
 router.post("/customer/verify-otp", userController.verifyCustomerOTP); 
 router.post("/customer/resend-otp", userController.resendOTP);  
-router.post("/admin/setup", userController.createAdmin); //Initial Admin Setup(First Time Only) 
-router.post("/forgot-password", userController.forgotPassword); // Password reset (All Roles)
-router.post("/reset-password", userController.resetPassword);  // Password reset (All Roles)       
+router.post("/admin/setup", userController.createAdmin); 
+router.post("/forgot-password", userController.forgotPassword); 
+router.post("/reset-password", userController.resetPassword);        
 
 // ==================== PROTECTED ROUTES (Authentication Needed) ====================
 // COMMON ROUTES (All Authenticated Users)
@@ -47,7 +48,7 @@ router.put('/booking/:id/price-quote', protect, adminOnly, bookingController.upd
 // Customer response routes
 router.put('/booking/:id/accept',protect, adminOnly, bookingController.acceptQuote);
 router.put('/booking/:id/reject',protect, adminOnly, bookingController.rejectQuote);
-router.put('/booking/:id/cancel', bookingController.cancelBooking); // Both customer and admin
+router.put('/booking/:id/cancel', bookingController.cancelBooking); 
 router.get('/my-bookings', protect, bookingController.getMyBookings);
 
 router.get('/my-bookings/summary',protect, bookingController.getMyBookingsSummary);
@@ -62,42 +63,149 @@ router.get('/my-bookings/:id/quote', protect,  bookingController.getMyBookingQuo
 // shipment
 // ==================== PUBLIC ROUTES ==================== 
 // ========== PUBLIC TRACKING (No Auth Required) ==========
+router.get('/getAllShipment',protect,  adminOnly, shipmentController.getAllShipments); 
 router.get('/track/:trackingNumber',protect, shipmentController.trackByNumber); 
 
 // ========== CUSTOMER ROUTES ==========
-router.get('/my-shipments',protect,  shipmentController.getMyShipments); // কাস্টমারের নিজের shipment দেখা
-router.get('/my-shipments/:id',protect,  shipmentController.getMyShipmentById); // কাস্টমারের নিজের shipment details
-router.get('/my-shipments/:id/timeline',protect,  shipmentController.getMyShipmentTimeline); // কাস্টমারের নিজের timeline
+router.get('/my-shipments',protect,  shipmentController.getMyShipments); 
+router.get('/my-shipments/:id',protect,  shipmentController.getMyShipmentById); 
+router.get('/my-shipments/:id/timeline',protect,  shipmentController.getMyShipmentTimeline); 
 
 // ========== COMMON ROUTES (Accessible by multiple roles) ==========
-router.get('/stats/dashboard', protect, shipmentController.getShipmentStatistics); // Admin/Operations দেখতে পারবে
-router.get('/:id',protect,  shipmentController.getShipmentById); // সবাই দেখতে পারে (permission inside controller)
-router.get('/:id/timeline',protect,  shipmentController.getShipmentTimeline); // সবাই দেখতে পারে
+router.get('/stats/dashboard', protect, shipmentController.getShipmentStatistics); 
+router.get('/my-shipment-by-id/:id',protect,  shipmentController.getShipmentById); 
+router.get('/my-shipment-timeline/:id/timeline',protect,  shipmentController.getShipmentTimeline); 
 
 // ========== ADMIN + OPERATIONS ROUTES ==========
-router.get('/getAllShipment',protect,  adminOnly, shipmentController.getAllShipments); // সব shipments দেখা
-router.post('/create',protect,  adminOnly, shipmentController.createShipment); // নতুন shipment create
-router.put('/:id',protect,  adminOnly, shipmentController.updateShipment); // shipment update
-router.delete('/:id',protect,  adminOnly, shipmentController.deleteShipment); // shipment delete
-router.patch('/:id/status',protect,  adminOnly, shipmentController.updateShipmentStatus); // status update
-router.post('/:id/tracking',protect,  adminOnly, shipmentController.addTrackingUpdate); // tracking update
-router.post('/:id/assign',protect,  adminOnly, shipmentController.assignShipment); // assign to staff
-router.post('/:id/transport',protect,  adminOnly, shipmentController.updateTransportDetails); // transport details
-router.post('/:id/documents',protect,  adminOnly, shipmentController.addDocument); // documents add
-router.post('/:id/notes/internal',protect,  adminOnly, shipmentController.addInternalNote); // internal notes
-router.post('/:id/cancel',protect,  adminOnly, shipmentController.cancelShipment); // cancel shipment
+router.post('/my-shipment/create',protect,  adminOnly, shipmentController.createShipment); 
+router.put('/update-shipment/:id',protect,  adminOnly, shipmentController.updateShipment); 
+router.delete('/delete-shipment/:id',protect,  adminOnly, shipmentController.deleteShipment); 
+router.patch('/update-shipment-status/:id',protect,  adminOnly, shipmentController.updateShipmentStatus);  
+router.post('/add-tracking-update/:id',protect,  adminOnly, shipmentController.addTrackingUpdate);  
+router.post('/assign-shipment/:id',protect,  adminOnly, shipmentController.assignShipment); 
+router.post('/update-transport-details/:id',protect,  adminOnly, shipmentController.updateTransportDetails); 
+router.post('/add-document/:id',protect,  adminOnly, shipmentController.addDocument); 
+router.post('/my-shipment/:id/notes/internal',protect,  adminOnly, shipmentController.addInternalNote); 
+router.post('/my-shipment/:id/cancel',protect,  adminOnly, shipmentController.cancelShipment);  
 
 // ========== COSTS ROUTES (Finance/Admin) ==========
-router.post('/:id/costs',protect,  adminOnly, shipmentController.addCost); // add cost
-router.get('/:id/costs',protect,  adminOnly, shipmentController.getShipmentCosts); // get costs
-router.put('/:id/costs/:costId',protect,  adminOnly, shipmentController.updateCost); // update cost
-router.delete('/:id/costs/:costId',protect,  adminOnly, shipmentController.deleteCost); // delete cost
+router.post('/my-shipment/:id/costs',protect,  adminOnly, shipmentController.addCost); 
+router.get('/my-shipment/:id/costs',protect,  adminOnly, shipmentController.getShipmentCosts); 
+router.put('/my-shipment/:id/costs/:costId',protect,  adminOnly, shipmentController.updateCost); 
+router.delete('/my-shipment/:id/costs/:costId',protect,  adminOnly, shipmentController.deleteCost);  
 
 // ========== WAREHOUSE ROUTES ==========
-// router.get('/warehouse/pending',protect,  warehouseOnly, shipmentController.getPendingWarehouseShipments); // pending warehouse shipments
-// router.patch('/:id/warehouse/receive',protect,  warehouseOnly, shipmentController.receiveAtWarehouse); // receive at warehouse
-// router.patch('/:id/warehouse/process',protect,  warehouseOnly, shipmentController.processWarehouse); // warehouse processing
+router.get('/warehouse/pending',protect,  adminOnly, shipmentController.getPendingWarehouseShipments); 
+router.patch('/:id/warehouse/receive',protect,  adminOnly, shipmentController.receiveAtWarehouse); 
+router.patch('/:id/warehouse/process',protect,  adminOnly, shipmentController.processWarehouse); 
 
 // ========== NOTES ROUTES ==========
-router.post('/:id/notes/customer', protect, shipmentController.addCustomerNote); // customer notes (customer+admin)
+router.post('/my-shipment/:id/notes/customer', protect, shipmentController.addCustomerNote); // customer notes (customer+admin)
+
+// ========== WAREHOUSE MANAGEMENT ==========
+
+// Get all warehouses (admin only)
+router.get('/getAllwarehouses',protect,  adminOnly,warehouseController.getAllWarehouses);
+
+// Create warehouse (admin only)
+router.post('/warehouses',protect,  adminOnly,warehouseController.createWarehouse);
+
+// Update warehouse (admin only)
+router.put('/warehouses/:id',protect,warehouseController.updateWarehouse);
+
+// ========== WAREHOUSE OPERATIONS ==========
+
+// Dashboard
+router.get('/dashboard',protect,  adminOnly,warehouseController.getWarehouseDashboard);
+
+// Expected shipments (pending receipt)
+router.get('/expected-shipments',protect,  adminOnly,warehouseController.getExpectedShipments);
+
+// Receive shipment at warehouse
+router.post('/receive/:shipmentId',protect,  adminOnly,warehouseController.receiveShipment);
+
+// Inspect received shipment
+router.post('/inspect/:receiptId',protect,  adminOnly,warehouseController.inspectShipment);
+
+// ========== WAREHOUSE RECEIPTS ==========
+
+// Get all receipts
+router.get('/receipts',protect,  adminOnly,warehouseController.getWarehouseReceipts);
+
+// Get receipt by ID
+router.get(
+    '/receipts/:id',
+    protect,
+    adminOnly,
+    warehouseController.getReceiptById
+);
+
+// ========== WAREHOUSE INVENTORY ==========
+
+// Get inventory
+router.get(
+    '/inventory',
+    protect,
+    adminOnly,
+    warehouseController.getWarehouseInventory
+);
+
+// Update inventory location
+router.put(
+    '/inventory/:id/location',
+    protect,
+    adminOnly,
+    warehouseController.updateInventoryLocation
+);
+
+// ========== CONSOLIDATION ==========
+
+// Get all consolidations
+router.get(
+    '/consolidations',
+    protect,
+    adminOnly,
+    warehouseController.getConsolidations
+);
+
+// Get consolidation by ID
+router.get(
+    '/consolidations/:id',
+    protect,
+    adminOnly,
+    warehouseController.getConsolidationById
+);
+
+// Start consolidation
+router.post(
+    '/consolidations/start',
+    protect,
+    adminOnly,
+    warehouseController.startConsolidation
+);
+
+// Complete consolidation
+router.put(
+    '/consolidations/:id/complete',
+    protect,
+    adminOnly,
+    warehouseController.completeConsolidation
+);
+
+// Load and depart consolidation
+router.put(
+    '/consolidations/:id/depart',
+    protect,
+    adminOnly,
+    warehouseController.loadAndDepart
+);
+
+// Add documents to consolidation
+router.post(
+    '/consolidations/:id/documents',
+    protect,
+    adminOnly,
+    warehouseController.addConsolidationDocuments
+);
+
 module.exports = router;

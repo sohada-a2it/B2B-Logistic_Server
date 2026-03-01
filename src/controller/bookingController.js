@@ -2,7 +2,7 @@ const Booking = require('../models/bookingModel');
 const Shipment = require('../models/shipmentModel');
 const Invoice = require('../models/invoiceModel');
 const User = require('../models/userModel');
-const { sendEmail } = require('../utils/emailService');  // small 'e', small 's'
+const { sendEmail } = require('../utils/emailService');  
 const { generateTrackingNumber } = require('../utils/trackingGenerator'); 
 
 // ========== 1. CREATE BOOKING (Customer) ==========
@@ -234,9 +234,7 @@ exports.updatePriceQuote = async (req, res) => {
     }
 };
 
-// ========== 5. CUSTOMER ACCEPT QUOTE ==========  
-
-// controllers/bookingController.js - সম্পূর্ণ acceptQuote ফাংশন
+// controllers/bookingController.js - আপডেটেড acceptQuote ফাংশন
 
 // ========== 5. CUSTOMER ACCEPT QUOTE ==========  
 exports.acceptQuote = async (req, res) => {
@@ -395,26 +393,81 @@ exports.acceptQuote = async (req, res) => {
                 tracking: shipment.trackingNumber
             });
 
-            // Notify warehouse team about new shipment
+            // ===== ওয়্যারহাউস ট্রিগার - স্টেপ ১: ওয়্যারহাউস স্টাফ খুঁজে বের করা =====
+            console.log('   🔔 Triggering warehouse notifications...');
+            
+            // Find all warehouse staff
             const warehouseStaff = await User.find({ 
                 role: 'warehouse', 
                 isActive: true 
             });
             
             if (warehouseStaff.length > 0) {
-                sendEmail({
+                console.log(`   📋 Found ${warehouseStaff.length} warehouse staff`);
+                
+                // Send email to ALL warehouse staff
+                await sendEmail({
                     to: warehouseStaff.map(w => w.email),
-                    subject: '📦 New Shipment Ready for Processing',
-                    template: 'new-shipment-notification',
+                    subject: '📦 New Shipment Ready for Warehouse Processing',
+                    template: 'new-shipment-warehouse',
                     data: {
                         trackingNumber: trackingNumber,
                         customerName: booking.customer?.companyName || booking.customer?.firstName || 'Customer',
                         origin: booking.shipmentDetails?.origin || 'N/A',
                         destination: booking.shipmentDetails?.destination || 'N/A',
                         packages: packages.length,
-                        shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`
+                        totalWeight: booking.shipmentDetails?.totalWeight || 0,
+                        totalVolume: booking.shipmentDetails?.totalVolume || 0,
+                        shipmentType: booking.shipmentDetails?.shipmentType || 'N/A',
+                        bookingNumber: booking.bookingNumber,
+                        expectedDate: new Date().toLocaleDateString(),
+                        shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`,
+                        warehouseDashboardUrl: `${process.env.FRONTEND_URL}/warehouse/dashboard`
                     }
-                }).catch(err => console.log('Warehouse email error:', err.message));
+                }).catch(err => console.log('   ⚠️ Warehouse email error:', err.message));
+
+                // ===== ওয়্যারহাউস ট্রিগার - স্টেপ ২: ওয়্যারহাউস ড্যাশবোর্ডে নোটিফিকেশন =====
+                // (এটা রিয়েল-টাইম নোটিফিকেশনের জন্য - যদি Socket.IO ব্যবহার করেন)
+                if (req.io) {
+                    req.io.to('warehouse').emit('new-shipment-ready', {
+                        shipmentId: shipment._id,
+                        trackingNumber: trackingNumber,
+                        customerName: booking.customer?.companyName || booking.customer?.firstName,
+                        message: 'New shipment ready for warehouse receipt'
+                    });
+                    console.log('   🔔 Real-time notification sent to warehouse dashboard');
+                }
+                
+                // ===== ওয়্যারহাউস ট্রিগার - স্টেপ ৩: ওয়্যারহাউস লিডকে SMS (যদি কনফিগার করা থাকে) =====
+                // এটা ঐচ্ছিক - যদি SMS সার্ভিস থাকে
+                /*
+                const warehouseLead = warehouseStaff.find(w => w.isLead === true);
+                if (warehouseLead && warehouseLead.phone) {
+                    await sendSMS({
+                        to: warehouseLead.phone,
+                        message: `New shipment ${trackingNumber} ready for warehouse. Customer: ${booking.customer?.companyName || booking.customer?.firstName}`
+                    });
+                }
+                */
+                
+                console.log('   ✅ Warehouse notifications sent successfully');
+            } else {
+                console.log('   ⚠️ No active warehouse staff found');
+                
+                // Fallback: Send to admins if no warehouse staff
+                const admins = await User.find({ role: 'admin', isActive: true });
+                if (admins.length > 0) {
+                    await sendEmail({
+                        to: admins.map(a => a.email),
+                        subject: '⚠️ New Shipment - No Warehouse Staff Found',
+                        template: 'new-shipment-admin-fallback',
+                        data: {
+                            trackingNumber: trackingNumber,
+                            customerName: booking.customer?.companyName || booking.customer?.firstName,
+                            shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment._id}`
+                        }
+                    });
+                }
             }
 
         } catch (shipmentError) {
@@ -541,7 +594,7 @@ exports.acceptQuote = async (req, res) => {
             // Calculate subtotal
             const subtotal = charges.reduce((sum, charge) => sum + charge.amount, 0);
 
-            // Prepare invoice data (without invoiceNumber - it will be auto-generated)
+            // Prepare invoice data
             const invoiceData = {
                 bookingId: booking._id,
                 shipmentId: shipment?._id,
@@ -576,7 +629,7 @@ exports.acceptQuote = async (req, res) => {
                 totalAmount: invoiceData.totalAmount
             });
 
-            // Save to database - invoiceNumber will be auto-generated by pre-save middleware
+            // Save to database
             invoice = await Invoice.create(invoiceData);
             
             // Update booking with invoice reference
@@ -585,7 +638,7 @@ exports.acceptQuote = async (req, res) => {
             
             console.log('   ✅ Invoice created with auto-generated number:', {
                 id: invoice._id,
-                number: invoice.invoiceNumber,  // Auto-generated: INV-2602-00001
+                number: invoice.invoiceNumber,
                 amount: invoice.totalAmount,
                 paymentStatus: invoice.paymentStatus
             });
@@ -627,7 +680,7 @@ exports.acceptQuote = async (req, res) => {
 
         // Customer Email
         if (booking.customer?.email) {
-            sendEmail({
+            await sendEmail({
                 to: booking.customer.email,
                 subject: '🎉 Booking Confirmed! - Cargo Logistics',
                 template: 'booking-confirmed-customer',
@@ -640,38 +693,40 @@ exports.acceptQuote = async (req, res) => {
                     trackingUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/tracking/${trackingNumber}`,
                     invoiceUrl: `${process.env.FRONTEND_URL}/customer/invoices/${invoice?._id || ''}`,
                     invoiceNumber: invoice?.invoiceNumber || 'N/A',
-                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`
+                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
+                    origin: booking.shipmentDetails?.origin || 'N/A',
+                    destination: booking.shipmentDetails?.destination || 'N/A',
+                    estimatedDelivery: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString()
                 }
             }).catch(err => console.log('Customer email error:', err.message));
         }
 
         // Admin Emails
-        User.find({ role: 'admin', isActive: true }).then(admins => {
-            if (admins.length > 0) {
-                sendEmail({
-                    to: admins.map(a => a.email),
-                    subject: '✅ Booking Confirmed - Action Required',
-                    template: 'booking-confirmed-admin',
-                    data: {
-                        bookingNumber: booking.bookingNumber,
-                        customerName: booking.customer?.companyName || booking.customer?.firstName || 'Customer',
-                        trackingNumber: trackingNumber,
-                        origin: booking.shipmentDetails?.origin || 'N/A',
-                        destination: booking.shipmentDetails?.destination || 'N/A',
-                        shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment?._id || ''}`,
-                        invoiceUrl: `${process.env.FRONTEND_URL}/admin/invoices/${invoice?._id || ''}`,
-                        invoiceNumber: invoice?.invoiceNumber || 'N/A'
-                    }
-                }).catch(err => console.log('Admin email error:', err.message));
-            }
-        }).catch(err => console.log('Admin fetch error:', err.message));
+        const admins = await User.find({ role: 'admin', isActive: true });
+        if (admins.length > 0) {
+            await sendEmail({
+                to: admins.map(a => a.email),
+                subject: '✅ Booking Confirmed - Action Required',
+                template: 'booking-confirmed-admin',
+                data: {
+                    bookingNumber: booking.bookingNumber,
+                    customerName: booking.customer?.companyName || booking.customer?.firstName || 'Customer',
+                    trackingNumber: trackingNumber,
+                    origin: booking.shipmentDetails?.origin || 'N/A',
+                    destination: booking.shipmentDetails?.destination || 'N/A',
+                    shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment?._id || ''}`,
+                    invoiceUrl: `${process.env.FRONTEND_URL}/admin/invoices/${invoice?._id || ''}`,
+                    invoiceNumber: invoice?.invoiceNumber || 'N/A'
+                }
+            }).catch(err => console.log('Admin email error:', err.message));
+        }
 
         // ===== STEP 4: Return Success Response =====
         console.log('9. ✅ Accept quote completed successfully');
         
         res.status(200).json({
             success: true,
-            message: 'Booking confirmed successfully. Shipment and invoice created.',
+            message: 'Booking confirmed successfully. Shipment and invoice created. Warehouse notified.',
             data: {
                 booking: {
                     _id: booking._id,
@@ -685,11 +740,12 @@ exports.acceptQuote = async (req, res) => {
                     _id: shipment._id,
                     shipmentNumber: shipment.shipmentNumber,
                     trackingNumber: shipment.trackingNumber,
-                    status: shipment.status
+                    status: shipment.status,
+                    warehouseNotified: true
                 } : null,
                 invoice: invoice ? {
                     _id: invoice._id,
-                    invoiceNumber: invoice.invoiceNumber,  // Auto-generated number
+                    invoiceNumber: invoice.invoiceNumber,
                     totalAmount: invoice.totalAmount,
                     currency: invoice.currency
                 } : null
