@@ -1,3 +1,5 @@
+// models/shipmentModel.js - আপডেটেড ভার্সন
+
 const mongoose = require('mongoose');
 
 // Enums
@@ -15,19 +17,19 @@ const shipmentStatuses = [
     'returned'
 ];
 
-// Package Schema
+// Package Schema - Booking-এর packageDetails-এর সাথে মিল রেখে
 const packageSchema = new mongoose.Schema({
+    description: String,           // Booking থেকে আসবে
     packageType: {
         type: String,
         enum: ['Pallet', 'Carton', 'Crate', 'Box', 'Container'],
-        required: true
+        default: 'Carton'
     },
     quantity: {
         type: Number,
         required: true,
         min: 1
     },
-    description: String,
     weight: {
         type: Number,
         required: true,
@@ -37,6 +39,18 @@ const packageSchema = new mongoose.Schema({
         type: Number,
         required: true,
         min: 0
+    },
+    dimensions: {                   // Booking থেকে আসবে
+        length: Number,
+        width: Number,
+        height: Number,
+        unit: { type: String, default: 'cm' }
+    },
+    productCategory: String,        // Booking থেকে আসবে
+    hsCode: String,                  // Booking থেকে আসবে
+    value: {                         // Booking থেকে আসবে
+        amount: Number,
+        currency: { type: String, default: 'USD' }
     },
     warehouseLocation: String,
     condition: {
@@ -85,7 +99,7 @@ const shipmentSchema = new mongoose.Schema({
         required: true
     },
     
-    // Customer Reference
+    // Customer Reference - Booking-এর customer-এর সাথে মিল রেখে
     customerId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -94,15 +108,48 @@ const shipmentSchema = new mongoose.Schema({
     
     // Shipment Details (copied from booking)
     shipmentDetails: {
-        shipmentType: String,
+        shipmentType: {
+            type: String,
+            enum: ['air_freight', 'sea_freight', 'express_courier']
+        },
         origin: String,
         destination: String,
-        shippingMode: String
+        shippingMode: {
+            type: String,
+            enum: ['DDP', 'DDU', 'FOB', 'CIF']
+        }
     },
     
-    // Addresses
-    pickupAddress: mongoose.Schema.Types.Mixed,
-    deliveryAddress: mongoose.Schema.Types.Mixed,
+    // Addresses - Booking-এর sender/receiver format-এ
+    sender: {                        // pickupAddress-এর পরিবর্তে
+        name: String,
+        companyName: String,
+        email: String,
+        phone: String,
+        address: {
+            addressLine1: String,
+            addressLine2: String,
+            city: String,
+            state: String,
+            country: String,
+            postalCode: String
+        }
+    },
+    receiver: {                      // deliveryAddress-এর পরিবর্তে
+        name: String,
+        companyName: String,
+        email: String,
+        phone: String,
+        address: {
+            addressLine1: String,
+            addressLine2: String,
+            city: String,
+            state: String,
+            country: String,
+            postalCode: String
+        },
+        isResidential: Boolean
+    },
     
     // Status
     status: {
@@ -124,6 +171,12 @@ const shipmentSchema = new mongoose.Schema({
     totalVolume: {
         type: Number,
         default: 0
+    },
+    
+    // Courier Information - Booking থেকে আসবে
+    courier: {
+        company: { type: String, default: 'Cargo Logistics Group' },
+        serviceType: String
     },
     
     // Container Details
@@ -155,7 +208,11 @@ const shipmentSchema = new mongoose.Schema({
         estimatedDeparture: Date,
         estimatedArrival: Date,
         actualDeparture: Date,
-        actualArrival: Date
+        actualArrival: Date,
+        currentLocation: {
+            address: String,
+            lastUpdated: Date
+        }
     },
     
     // Milestones
@@ -164,63 +221,63 @@ const shipmentSchema = new mongoose.Schema({
         type: String,
         enum: shipmentStatuses
     },
-     
-
-warehouseInfo: {
-    receivedDate: Date,
-    receivedBy: {
+    
+    // Warehouse Info
+    warehouseInfo: {
+        receivedDate: Date,
+        receivedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        location: String,
+        receiptId: String,
+        notes: String
+    },
+    
+    consolidationId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+        ref: 'Consolidation'
     },
-    location: String,
-    receiptId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'WarehouseReceipt'
-    },
-    notes: String
-},
-
-consolidationId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Consolidation'
-},
-
-internalNotes: [{
-    note: String,
-    createdBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-    },
-    createdAt: Date
-}],
-
-customerNotes: [{
-    note: String,
-    createdBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-    },
-    createdAt: Date
-}],
-
-costs: [{
-    type: {
-        type: String,
-        enum: ['freight', 'handling', 'warehouse', 'customs', 'insurance', 'other']
-    },
-    amount: Number,
-    currency: { type: String, default: 'USD' },
-    description: String,
-    vendor: String,
-    incurredBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-    },
-    incurredAt: Date
-}],
-
-cancelledAt: Date,
-cancellationReason: String,
+    
+    // Notes
+    internalNotes: [{
+        note: String,
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        createdAt: Date
+    }],
+    
+    customerNotes: [{
+        note: String,
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        createdAt: Date
+    }],
+    
+    // Costs
+    costs: [{
+        type: {
+            type: String,
+            enum: ['freight', 'handling', 'warehouse', 'customs', 'insurance', 'other']
+        },
+        amount: Number,
+        currency: { type: String, default: 'USD' },
+        description: String,
+        vendor: String,
+        incurredBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        incurredAt: Date
+    }],
+    
+    // Cancellation
+    cancelledAt: Date,
+    cancellationReason: String,
     
     // Documents
     documents: [{
@@ -235,10 +292,8 @@ cancellationReason: String,
     },
     
     // Dates
-    createdDate: {
-        type: Date,
-        default: Date.now
-    },
+    estimatedDepartureDate: Date,    // Booking থেকে আসবে
+    estimatedArrivalDate: Date,      // Booking থেকে আসবে
     actualDeliveryDate: Date,
     
     // Audit
@@ -250,14 +305,6 @@ cancellationReason: String,
     updatedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now
-    },
-    updatedAt: {
-        type: Date,
-        default: Date.now
     }
 }, {
     timestamps: true

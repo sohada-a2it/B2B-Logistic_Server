@@ -125,5 +125,23 @@ consolidationSchema.pre('save', async function(next) {
     }
     next();
 });
+// Add indexes for better performance
+consolidationSchema.index({ status: 1 });
+consolidationSchema.index({ warehouseId: 1, status: 1 });
+consolidationSchema.index({ estimatedDeparture: 1 });
 
+// Add virtual for duration
+consolidationSchema.virtual('consolidationDuration').get(function() {
+    if (this.consolidationStarted && this.consolidationCompleted) {
+        return (this.consolidationCompleted - this.consolidationStarted) / (1000 * 60 * 60); // hours
+    }
+    return null;
+});
+
+// Add method to check if ready to depart
+consolidationSchema.methods.isReadyToDepart = function() {
+    return this.status === 'completed' && 
+           this.containerNumber && 
+           this.sealNumber;
+};
 module.exports = mongoose.model('Consolidation', consolidationSchema);

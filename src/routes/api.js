@@ -57,7 +57,7 @@ router.get('/my-bookings/:id', protect, bookingController.getMyBookingById);
 
 router.get('/my-bookings/:id/timeline',protect,  bookingController.getMyBookingTimeline);
 
-router.get('/my-bookings/:id/invoice', protect,  bookingController.getMyBookingInvoices);
+router.get('/my-bookings/:id/invoice', protect,  bookingController.getMyBookingInvoice);
 
 router.get('/my-bookings/:id/quote', protect,  bookingController.getMyBookingQuote);  
 // shipment

@@ -516,7 +516,376 @@ const templates = {
             </html>
         `
     }),
+    // ========== RECEIVER TEMPLATES ==========
+    'receiver-shipment-confirmed': (data) => ({
+        subject: `📦 Your Shipment is Confirmed - ${data.trackingNumber}`,
+        html: `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { 
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                        line-height: 1.6; 
+                        color: #333; 
+                        margin: 0; 
+                        padding: 0;
+                        background-color: #f5f5f5;
+                    }
+                    .container { 
+                        max-width: 600px; 
+                        margin: 20px auto; 
+                        background: white;
+                        border-radius: 10px;
+                        overflow: hidden;
+                        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+                    }
+                    .header { 
+                        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); 
+                        color: white; 
+                        padding: 30px 20px; 
+                        text-align: center; 
+                    }
+                    .header h1 { 
+                        margin: 0; 
+                        font-size: 28px; 
+                        font-weight: 600; 
+                    }
+                    .header p { 
+                        margin: 10px 0 0; 
+                        opacity: 0.9; 
+                        font-size: 16px; 
+                    }
+                    .content { 
+                        padding: 30px; 
+                        background: white; 
+                    }
+                    .greeting { 
+                        font-size: 18px; 
+                        margin-bottom: 20px; 
+                    }
+                    .greeting strong { 
+                        color: #2563eb; 
+                    }
+                    .info-box { 
+                        background: #f8fafc; 
+                        border-left: 4px solid #2563eb; 
+                        padding: 20px; 
+                        margin: 25px 0; 
+                        border-radius: 0 8px 8px 0; 
+                    }
+                    .info-box h3 { 
+                        margin: 0 0 15px; 
+                        color: #2563eb; 
+                        font-size: 18px; 
+                    }
+                    .info-grid { 
+                        display: grid; 
+                        grid-template-columns: 1fr 1fr; 
+                        gap: 15px; 
+                    }
+                    .info-item { 
+                        margin-bottom: 10px; 
+                    }
+                    .info-item .label { 
+                        font-size: 12px; 
+                        color: #64748b; 
+                        text-transform: uppercase; 
+                        letter-spacing: 0.5px; 
+                        margin-bottom: 4px; 
+                    }
+                    .info-item .value { 
+                        font-size: 16px; 
+                        font-weight: 600; 
+                        color: #1e293b; 
+                    }
+                    .tracking-section { 
+                        text-align: center; 
+                        margin: 30px 0; 
+                        padding: 20px; 
+                        background: linear-gradient(135deg, #f0f9ff 0%, #e6f2ff 100%); 
+                        border-radius: 8px; 
+                    }
+                    .tracking-number { 
+                        font-size: 24px; 
+                        font-weight: 700; 
+                        color: #2563eb; 
+                        letter-spacing: 1px; 
+                        margin: 10px 0; 
+                        padding: 10px; 
+                        background: white; 
+                        border-radius: 5px; 
+                        display: inline-block; 
+                        border: 1px solid #2563eb;
+                    }
+                    .tracking-button { 
+                        display: inline-block; 
+                        background-color: #2563eb; 
+                        color: white; 
+                        text-decoration: none; 
+                        padding: 14px 32px; 
+                        border-radius: 5px; 
+                        font-weight: 600; 
+                        margin: 15px 0; 
+                        transition: background-color 0.3s; 
+                    }
+                    .tracking-button:hover { 
+                        background-color: #1d4ed8; 
+                    }
+                    .package-summary { 
+                        margin: 25px 0; 
+                        border: 1px solid #e2e8f0; 
+                        border-radius: 8px; 
+                        overflow: hidden; 
+                    }
+                    .package-header { 
+                        background-color: #f1f5f9; 
+                        padding: 12px 15px; 
+                        font-weight: 600; 
+                        color: #2563eb; 
+                    }
+                    .package-content { 
+                        padding: 15px; 
+                        display: flex; 
+                        justify-content: space-between; 
+                        flex-wrap: wrap; 
+                    }
+                    .package-stat { 
+                        text-align: center; 
+                        flex: 1; 
+                        min-width: 100px; 
+                    }
+                    .package-stat .number { 
+                        font-size: 22px; 
+                        font-weight: 700; 
+                        color: #2563eb; 
+                    }
+                    .package-stat .label { 
+                        font-size: 12px; 
+                        color: #64748b; 
+                    }
+                    .address-section { 
+                        margin: 20px 0; 
+                        padding: 15px; 
+                        background-color: #f8fafc; 
+                        border-radius: 8px; 
+                    }
+                    .address-grid { 
+                        display: grid; 
+                        grid-template-columns: 1fr 1fr; 
+                        gap: 20px; 
+                    }
+                    .address-box { 
+                        padding: 10px; 
+                    }
+                    .address-box h4 { 
+                        color: #2563eb; 
+                        margin: 0 0 10px; 
+                        font-size: 16px; 
+                    }
+                    .address-box p { 
+                        margin: 5px 0; 
+                        color: #475569; 
+                    }
+                    .footer { 
+                        background-color: #f8fafc; 
+                        padding: 30px; 
+                        text-align: center; 
+                        border-top: 1px solid #e2e8f0; 
+                    }
+                    .footer p { 
+                        margin: 5px 0; 
+                        color: #64748b; 
+                        font-size: 14px; 
+                    }
+                    .footer .company { 
+                        font-weight: 600; 
+                        color: #2563eb; 
+                    }
+                    .divider { 
+                        height: 1px; 
+                        background-color: #e2e8f0; 
+                        margin: 25px 0; 
+                    }
+                    .note { 
+                        background-color: #fff7ed; 
+                        border-left: 4px solid #f97316; 
+                        padding: 12px 15px; 
+                        margin: 20px 0; 
+                        font-size: 14px; 
+                        color: #9a3412; 
+                    }
+                    @media only screen and (max-width: 480px) {
+                        .content { padding: 20px 15px; }
+                        .info-grid { grid-template-columns: 1fr; }
+                        .address-grid { grid-template-columns: 1fr; }
+                        .tracking-number { font-size: 20px; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <!-- Header -->
+                    <div class="header">
+                        <h1>📦 Shipment Confirmed!</h1>
+                        <p>A package is on its way to you</p>
+                    </div>
 
+                    <!-- Content -->
+                    <div class="content">
+                        <!-- Greeting -->
+                        <div class="greeting">
+                            Hello <strong>${data.receiverName}</strong>,
+                        </div>
+                        
+                        <p style="font-size: 16px; color: #475569;">
+                            ${data.senderName} has sent a shipment to you through <strong>Cargo Logistics Group</strong>. 
+                            Your package has been confirmed and is being prepared for delivery.
+                        </p>
+
+                        <!-- Tracking Section -->
+                        <div class="tracking-section">
+                            <div style="font-size: 14px; color: #475569; margin-bottom: 10px;">
+                                Your Tracking Number
+                            </div>
+                            <div class="tracking-number">
+                                ${data.trackingNumber}
+                            </div>
+                            <div>
+                                <a href="${data.trackingUrl}" class="tracking-button">
+                                    🔍 Track Your Shipment
+                                </a>
+                            </div>
+                            <p style="font-size: 13px; color: #64748b; margin-top: 10px;">
+                                Click above to see real-time updates
+                            </p>
+                        </div>
+
+                        <!-- Shipment Information -->
+                        <div class="info-box">
+                            <h3>📋 Shipment Details</h3>
+                            <div class="info-grid">
+                                <div class="info-item">
+                                    <div class="label">Booking Number</div>
+                                    <div class="value">${data.bookingNumber}</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="label">Estimated Delivery</div>
+                                    <div class="value">${data.estimatedDelivery}</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="label">Origin</div>
+                                    <div class="value">${data.origin}</div>
+                                </div>
+                                <div class="info-item">
+                                    <div class="label">Destination</div>
+                                    <div class="value">${data.destination}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Package Summary -->
+                        <div class="package-summary">
+                            <div class="package-header">
+                                📦 Package Summary
+                            </div>
+                            <div class="package-content">
+                                <div class="package-stat">
+                                    <div class="number">${data.totalPackages}</div>
+                                    <div class="label">Packages</div>
+                                </div>
+                                <div class="package-stat">
+                                    <div class="number">${data.totalWeight} kg</div>
+                                    <div class="label">Total Weight</div>
+                                </div>
+                                <div class="package-stat">
+                                    <div class="number">${data.totalVolume} m³</div>
+                                    <div class="label">Total Volume</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Addresses -->
+                        <div class="address-section">
+                            <h4 style="color: #2563eb; margin-bottom: 15px;">📍 Delivery Information</h4>
+                            <div class="address-grid">
+                                <!-- From (Sender) -->
+                                <div class="address-box">
+                                    <h4>From:</h4>
+                                    <p><strong>${data.senderName}</strong></p>
+                                    ${data.senderCompany ? `<p>${data.senderCompany}</p>` : ''}
+                                    <p>${data.senderCountry}</p>
+                                </div>
+                                
+                                <!-- To (Receiver - You) -->
+                                <div class="address-box">
+                                    <h4>To:</h4>
+                                    <p><strong>${data.receiverName}</strong></p>
+                                    ${data.receiverCompany ? `<p>${data.receiverCompany}</p>` : ''}
+                                    <p>${data.destination}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Important Note -->
+                        <div class="note">
+                            <strong>📌 Please Note:</strong> You may need to be available to sign for this package. 
+                            Delivery times are estimates and may vary based on customs clearance and local conditions.
+                        </div>
+
+                        <!-- What to Expect -->
+                        <div style="margin: 25px 0;">
+                            <h4 style="color: #2563eb; margin-bottom: 15px;">⏳ What to Expect</h4>
+                            <ul style="list-style: none; padding: 0;">
+                                <li style="margin-bottom: 10px; display: flex; align-items: center;">
+                                    <span style="background: #2563eb; color: white; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; font-size: 12px;">1</span>
+                                    <span>Shipment processing at origin warehouse</span>
+                                </li>
+                                <li style="margin-bottom: 10px; display: flex; align-items: center;">
+                                    <span style="background: #2563eb; color: white; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; font-size: 12px;">2</span>
+                                    <span>In transit to destination country</span>
+                                </li>
+                                <li style="margin-bottom: 10px; display: flex; align-items: center;">
+                                    <span style="background: #2563eb; color: white; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; font-size: 12px;">3</span>
+                                    <span>Customs clearance (if applicable)</span>
+                                </li>
+                                <li style="margin-bottom: 10px; display: flex; align-items: center;">
+                                    <span style="background: #2563eb; color: white; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; font-size: 12px;">4</span>
+                                    <span>Out for delivery to your address</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <!-- Need Help -->
+                        <div style="text-align: center;">
+                            <p style="color: #475569;">
+                                <strong>Need assistance?</strong><br>
+                                Contact our support team at 
+                                <a href="mailto:${data.supportEmail}" style="color: #2563eb; text-decoration: none;">
+                                    ${data.supportEmail}
+                                </a>
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="footer">
+                        <div class="company">Cargo Logistics Group</div>
+                        <p>Delivering Excellence Worldwide 🌍</p>
+                        <p style="font-size: 12px; margin-top: 20px;">
+                            This email was sent regarding a shipment to you.<br>
+                            &copy; ${new Date().getFullYear()} Cargo Logistics Group. All rights reserved.
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `
+    }),
     // ========== CANCELLATION TEMPLATES ==========
     'booking-cancelled': (data) => ({
         subject: `🚫 Booking Cancelled - ${data.bookingNumber}`,

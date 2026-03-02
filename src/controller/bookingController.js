@@ -1,26 +1,190 @@
+// controllers/bookingController.js
+
 const Booking = require('../models/bookingModel');
 const Shipment = require('../models/shipmentModel');
 const Invoice = require('../models/invoiceModel');
 const User = require('../models/userModel');
-const { sendEmail } = require('../utils/emailService');  
-const { generateTrackingNumber } = require('../utils/trackingGenerator'); 
+const { sendEmail } = require('../utils/emailService');
+const { generateTrackingNumber } = require('../utils/trackingGenerator');
+
+// ========== HELPER FUNCTIONS ==========
+
+// Generate shipment number
+async function generateShipmentNumber() {
+    const date = new Date();
+    const year = date.getFullYear().toString().slice(-2);
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    
+    const count = await Shipment.countDocuments({
+        shipmentNumber: new RegExp(`^SHP-${year}${month}`)
+    });
+    
+    return `SHP-${year}${month}-${(count + 1).toString().padStart(5, '0')}`;
+}
+
+// Calculate customer total spent
+const calculateCustomerTotalSpent = async (customerId) => {
+    try {
+        const result = await Booking.aggregate([
+            { 
+                $match: { 
+                    customer: customerId,
+                    status: 'delivered',
+                    invoiceId: { $ne: null }
+                } 
+            },
+            {
+                $lookup: {
+                    from: 'invoices',
+                    localField: 'invoiceId',
+                    foreignField: '_id',
+                    as: 'invoice'
+                }
+            },
+            { $unwind: '$invoice' },
+            {
+                $group: {
+                    _id: null,
+                    totalSpent: { $sum: '$invoice.totalAmount' }
+                }
+            }
+        ]);
+
+        return result.length > 0 ? result[0].totalSpent : 0;
+    } catch (error) {
+        console.error('Calculate total spent error:', error);
+        return 0;
+    }
+};
+
+// Calculate progress percentage
+const calculateProgress = (status) => {
+    const statusOrder = [
+        'booking_requested',
+        'price_quoted',
+        'booking_confirmed',
+        'pending',
+        'picked_up_from_warehouse',
+        'departed_port_of_origin',
+        'in_transit_sea_freight',
+        'arrived_at_destination_port',
+        'customs_cleared',
+        'out_for_delivery',
+        'delivered'
+    ];
+
+    const index = statusOrder.indexOf(status);
+    if (index === -1) return 0;
+    return Math.round((index / (statusOrder.length - 1)) * 100);
+};
 
 // ========== 1. CREATE BOOKING (Customer) ==========
+// controllers/bookingController.js - Fixed version
+
 exports.createBooking = async (req, res) => {
     try {
+        console.log('📥 Received booking data:', JSON.stringify(req.body, null, 2));
+
+        const {
+            customer,
+            shipmentClassification,
+            serviceType,
+            shipmentDetails,
+            dates,
+            payment,
+            sender,
+            receiver,
+            courier,
+            status,
+            pricingStatus,
+            timeline
+        } = req.body;
+
+        // Validate required fields
+        if (!shipmentDetails?.origin) {
+            return res.status(400).json({
+                success: false,
+                error: 'Origin is required'
+            });
+        }
+        
+        if (!shipmentDetails?.destination) {
+            return res.status(400).json({
+                success: false,
+                error: 'Destination is required'
+            });
+        }
+
+        // Calculate totals from package details
+        let totalPackages = 0;
+        let totalWeight = 0;
+        let totalVolume = 0;
+
+        if (shipmentDetails?.packageDetails && shipmentDetails.packageDetails.length > 0) {
+            totalPackages = shipmentDetails.packageDetails.length;
+            totalWeight = shipmentDetails.packageDetails.reduce(
+                (sum, item) => sum + (item.weight * item.quantity), 0
+            );
+            totalVolume = shipmentDetails.packageDetails.reduce(
+                (sum, item) => sum + (item.volume * item.quantity), 0
+            );
+        }
+
         const bookingData = {
-            ...req.body,
-            customer: req.user._id,
-            createdBy: req.user._id,
-            status: 'booking_requested',
-            pricingStatus: 'pending',
-            timeline: [{
+            customer: customer || req.user?._id,
+            createdBy: req.user?._id || customer,
+            
+            shipmentClassification: shipmentClassification || {
+                mainType: 'air_freight',
+                subType: 'air_freight'
+            },
+            
+            serviceType: serviceType || 'standard',
+            
+            shipmentDetails: {
+                origin: shipmentDetails?.origin,
+                destination: shipmentDetails?.destination,
+                shippingMode: shipmentDetails?.shippingMode || 'DDU',
+                packageDetails: shipmentDetails?.packageDetails || [],
+                totalPackages,
+                totalWeight,
+                totalVolume,
+                specialInstructions: shipmentDetails?.specialInstructions || '',
+                referenceNumber: shipmentDetails?.referenceNumber || ''
+            },
+            
+            dates: {
+                requested: new Date(),
+                estimatedDeparture: dates?.estimatedDeparture,
+                estimatedArrival: dates?.estimatedArrival
+            },
+            
+            payment: {
+                mode: payment?.mode || 'bank_transfer',
+                currency: payment?.currency || 'USD'
+            },
+            
+            sender: sender || {},
+            receiver: receiver || {},
+            
+            courier: courier || {
+                company: 'Cargo Logistics Group',
+                serviceType: serviceType || 'standard'
+            },
+            
+            status: status || 'booking_requested',
+            pricingStatus: pricingStatus || 'pending',
+            shipmentStatus: 'pending',
+            
+            timeline: timeline || [{
                 status: 'booking_requested',
                 description: 'Booking request submitted',
-                updatedBy: req.user._id,
+                updatedBy: req.user?._id || customer,
                 timestamp: new Date()
             }]
         };
+
+        console.log('📦 Saving booking data:', JSON.stringify(bookingData, null, 2));
 
         const booking = new Booking(bookingData);
         await booking.save();
@@ -32,49 +196,66 @@ exports.createBooking = async (req, res) => {
         const admins = await User.find({ role: 'admin', isActive: true });
         const adminEmails = admins.map(admin => admin.email);
 
-        await sendEmail({
-            to: adminEmails,
-            subject: '🚨 New Booking Request Received',
-            template: 'new-booking-notification',
-            data: {
-                bookingNumber: booking.bookingNumber,
-                customerName: booking.customer.companyName || `${booking.customer.firstName} ${booking.customer.lastName}`,
-                origin: booking.shipmentDetails.origin,
-                destination: booking.shipmentDetails.destination,
-                totalCartons: booking.shipmentDetails.totalCartons,
-                totalWeight: booking.shipmentDetails.totalWeight,
-                bookingUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`,
-                requestedDate: new Date().toLocaleString()
-            }
-        });
+        if (adminEmails.length > 0) {
+            await sendEmail({
+                to: adminEmails,
+                subject: '🚨 New Booking Request Received',
+                template: 'new-booking-notification',
+                data: {
+                    bookingNumber: booking.bookingNumber,
+                    customerName: booking.sender?.name || 'Customer',
+                    origin: booking.shipmentDetails?.origin || 'N/A',
+                    destination: booking.shipmentDetails?.destination || 'N/A',
+                    totalPackages: booking.shipmentDetails?.totalPackages || 0,
+                    totalWeight: booking.shipmentDetails?.totalWeight || 0,
+                    bookingUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`,
+                    requestedDate: new Date().toLocaleString()
+                }
+            }).catch(err => console.error('Email error:', err));
+        }
 
         // Send confirmation to Customer
-        await sendEmail({
-            to: booking.customer.email,
-            subject: '✅ Booking Request Received - Cargo Logistics',
-            template: 'booking-received',
-            data: {
-                bookingNumber: booking.bookingNumber,
-                customerName: booking.customer.firstName,
-                origin: booking.shipmentDetails.origin,
-                destination: booking.shipmentDetails.destination,
-                dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
-                supportEmail: process.env.SUPPORT_EMAIL
-            }
-        });
+        if (booking.sender?.email) {
+            await sendEmail({
+                to: booking.sender.email,
+                subject: '✅ Booking Request Received - Cargo Logistics',
+                template: 'booking-received',
+                data: {
+                    bookingNumber: booking.bookingNumber,
+                    customerName: booking.sender?.name,
+                    origin: booking.sender?.address?.country,
+                    destination: booking.receiver?.address?.country,
+                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
+                    supportEmail: process.env.SUPPORT_EMAIL
+                }
+            }).catch(err => console.error('Email error:', err));
+        }
 
         res.status(201).json({
             success: true,
             message: 'Booking request submitted successfully',
             data: {
                 bookingNumber: booking.bookingNumber,
+                trackingNumber: booking.trackingNumber,
                 status: booking.status,
                 _id: booking._id
             }
         });
 
     } catch (error) {
-        console.error('Create booking error:', error);
+        console.error('❌ Create booking error:', error);
+        console.error('Error details:', error.message);
+        
+        // Check for validation errors
+        if (error.name === 'ValidationError') {
+            const errors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                success: false,
+                error: 'Validation failed',
+                details: errors
+            });
+        }
+        
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -85,7 +266,7 @@ exports.createBooking = async (req, res) => {
 // ========== 2. GET ALL BOOKINGS (Admin) ==========
 exports.getAllBookings = async (req, res) => {
     try {
-        const { status, page = 1, limit = 20 } = req.query;
+        const { status, page = 1, limit = 20, sort = '-createdAt' } = req.query;
         
         let query = {};
         if (status) query.status = status;
@@ -98,9 +279,11 @@ exports.getAllBookings = async (req, res) => {
         const bookings = await Booking.find(query)
             .populate('customer', 'firstName lastName companyName email phone')
             .populate('quotedPrice.quotedBy', 'firstName lastName')
-            .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .populate('shipmentId', 'trackingNumber status')
+            .populate('invoiceId', 'invoiceNumber totalAmount paymentStatus')
+            .sort(sort)
+            .limit(parseInt(limit))
+            .skip((parseInt(page) - 1) * parseInt(limit));
             
         const total = await Booking.countDocuments(query);
         
@@ -110,10 +293,12 @@ exports.getAllBookings = async (req, res) => {
             pagination: {
                 total,
                 page: parseInt(page),
-                pages: Math.ceil(total / limit)
+                pages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
             }
         });
     } catch (error) {
+        console.error('Get all bookings error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -126,6 +311,8 @@ exports.getBookingById = async (req, res) => {
         const booking = await Booking.findById(id)
             .populate('customer', 'firstName lastName companyName email phone address')
             .populate('quotedPrice.quotedBy', 'firstName lastName email')
+            .populate('shipmentId')
+            .populate('invoiceId')
             .populate('timeline.updatedBy', 'firstName lastName role');
             
         if (!booking) {
@@ -148,6 +335,7 @@ exports.getBookingById = async (req, res) => {
             data: booking
         });
     } catch (error) {
+        console.error('Get booking by id error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -175,21 +363,22 @@ exports.updatePriceQuote = async (req, res) => {
             });
         }
 
-        // Update with price quote
+        // Update with price quote - Schema অনুযায়ী
         booking.quotedPrice = {
             amount,
             currency,
             breakdown: breakdown || {
-                freightCost: 0,
-                handlingFee: 0,
-                warehouseFee: 0,
-                customsFee: 0,
+                baseRate: 0,
+                weightCharge: 0,
+                fuelSurcharge: 0,
+                residentialSurcharge: 0,
                 insurance: 0,
+                tax: 0,
                 otherCharges: 0
             },
             quotedBy: req.user._id,
             quotedAt: new Date(),
-            validUntil: validUntil || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+            validUntil: validUntil || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
             notes
         };
         
@@ -206,22 +395,24 @@ exports.updatePriceQuote = async (req, res) => {
         await booking.save();
 
         // Send email to Customer
-        await sendEmail({
-            to: booking.customer.email,
-            subject: '💰 Price Quote Ready for Your Booking',
-            template: 'price-quote-ready',
-            data: {
-                bookingNumber: booking.bookingNumber,
-                customerName: booking.customer.firstName,
-                quotedAmount: amount,
-                currency: currency,
-                validUntil: booking.quotedPrice.validUntil,
-                breakdown: breakdown,
-                acceptUrl: `${process.env.FRONTEND_URL}/customer/bookings/${booking._id}/accept`,
-                rejectUrl: `${process.env.FRONTEND_URL}/customer/bookings/${booking._id}/reject`,
-                dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`
-            }
-        });
+        if (booking.customer?.email) {
+            await sendEmail({
+                to: booking.customer.email,
+                subject: '💰 Price Quote Ready for Your Booking',
+                template: 'price-quote-ready',
+                data: {
+                    bookingNumber: booking.bookingNumber,
+                    customerName: booking.customer.firstName || 'Customer',
+                    quotedAmount: amount,
+                    currency: currency,
+                    validUntil: booking.quotedPrice.validUntil,
+                    breakdown: breakdown,
+                    acceptUrl: `${process.env.FRONTEND_URL}/customer/bookings/${booking._id}/accept`,
+                    rejectUrl: `${process.env.FRONTEND_URL}/customer/bookings/${booking._id}/reject`,
+                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`
+                }
+            });
+        }
 
         res.status(200).json({
             success: true,
@@ -230,13 +421,12 @@ exports.updatePriceQuote = async (req, res) => {
         });
 
     } catch (error) {
+        console.error('Update price quote error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
 
-// controllers/bookingController.js - আপডেটেড acceptQuote ফাংশন
-
-// ========== 5. CUSTOMER ACCEPT QUOTE ==========  
+// ========== 5. ACCEPT QUOTE (Customer) ==========
 exports.acceptQuote = async (req, res) => {
     try {
         const { id } = req.params;
@@ -256,7 +446,7 @@ exports.acceptQuote = async (req, res) => {
         }
 
         console.log('2. Booking found:', booking.bookingNumber);
-        console.log('3. Customer email:', booking.customer.email);
+        console.log('3. Customer email:', booking.customer?.email);
 
         // Security check
         if (booking.customer._id.toString() !== req.user._id.toString()) {
@@ -293,16 +483,16 @@ exports.acceptQuote = async (req, res) => {
         
         booking.pricingStatus = 'accepted';
         booking.status = 'booking_confirmed';
-        booking.confirmedAt = new Date();
+        booking.dates.confirmed = new Date();
         
-        // Generate tracking number with error handling
+        // Generate tracking number
         let trackingNumber;
         try {
             trackingNumber = await generateTrackingNumber();
             console.log('4. Tracking number generated:', trackingNumber);
         } catch (tnError) {
             console.error('Tracking number error:', tnError);
-            trackingNumber = `CLC${Date.now()}${Math.floor(Math.random() * 1000)}`;
+            trackingNumber = `TRK${Date.now()}${Math.floor(Math.random() * 1000)}`;
         }
         
         booking.trackingNumber = trackingNumber;
@@ -316,74 +506,66 @@ exports.acceptQuote = async (req, res) => {
         await booking.save();
         console.log('5. Booking saved successfully');
 
-        // ===== STEP 1: CREATE SHIPMENT (AUTOMATICALLY) =====
+        // ===== STEP 1: CREATE SHIPMENT =====
         console.log('6. Creating shipment automatically...');
         
         let shipment = null;
         try {
-            // Generate shipment number
             const shipmentNumber = await generateShipmentNumber();
             
-            // Prepare packages from cargo details
-            const packages = (booking.shipmentDetails?.cargoDetails || []).map(item => ({
-                packageType: 'Carton',
-                quantity: item.cartons || 0,
+            // Prepare packages from package details
+            const packages = (booking.shipmentDetails?.packageDetails || []).map(item => ({
+                packageType: item.packagingType || 'Carton',
+                quantity: item.quantity || 0,
                 description: item.description || '',
                 weight: item.weight || 0,
                 volume: item.volume || 0,
+                dimensions: item.dimensions || {
+                    length: 0,
+                    width: 0,
+                    height: 0,
+                    unit: 'cm'
+                },
+                productCategory: item.productCategory,
+                hsCode: item.hsCode,
+                value: item.value,
                 condition: 'Good'
             }));
 
-            // Create shipment data
             const shipmentData = {
                 shipmentNumber: shipmentNumber,
                 trackingNumber: trackingNumber,
                 bookingId: booking._id,
                 customerId: booking.customer._id,
+                
+                shipmentClassification: booking.shipmentClassification,
+                
                 shipmentDetails: {
-                    shipmentType: booking.shipmentDetails?.shipmentType || 'air_freight',
-                    origin: booking.shipmentDetails?.origin || '',
-                    destination: booking.shipmentDetails?.destination || '',
-                    shippingMode: booking.shipmentDetails?.shippingMode || 'DDP'
+                    origin: booking.shipmentDetails?.origin,
+                    destination: booking.shipmentDetails?.destination,
+                    shippingMode: booking.shipmentDetails?.shippingMode
                 },
-                pickupAddress: booking.pickupAddress || {
-                    consigneeName: booking.customer?.firstName + ' ' + booking.customer?.lastName,
-                    companyName: booking.customer?.companyName || '',
-                    phone: booking.customer?.phone || '',
-                    email: booking.customer?.email || '',
-                    addressLine1: '',
-                    city: '',
-                    state: '',
-                    country: '',
-                    postalCode: ''
-                },
-                deliveryAddress: booking.deliveryAddress || {
-                    consigneeName: booking.consigneeName || '',
-                    companyName: booking.companyName || '',
-                    phone: booking.phone || '',
-                    email: booking.email || '',
-                    addressLine1: '',
-                    city: '',
-                    state: '',
-                    country: '',
-                    postalCode: ''
-                },
+                
+                sender: booking.sender,
+                receiver: booking.receiver,
+                courier: booking.courier,
+                
                 packages: packages,
+                
                 status: 'pending',
                 createdBy: req.user._id,
+                
                 milestones: [{
                     status: 'pending',
-                    location: booking.shipmentDetails?.origin || 'Warehouse',
+                    location: booking.sender?.address?.country || 'Warehouse',
                     description: 'Shipment created from confirmed booking',
                     updatedBy: req.user._id,
                     timestamp: new Date()
                 }]
             };
 
-            // Create shipment in database
             shipment = await Shipment.create(shipmentData);
             
-            // Update booking with shipment reference
             booking.shipmentId = shipment._id;
             await booking.save();
             
@@ -393,195 +575,67 @@ exports.acceptQuote = async (req, res) => {
                 tracking: shipment.trackingNumber
             });
 
-            // ===== ওয়্যারহাউস ট্রিগার - স্টেপ ১: ওয়্যারহাউস স্টাফ খুঁজে বের করা =====
-            console.log('   🔔 Triggering warehouse notifications...');
-            
-            // Find all warehouse staff
+            // Notify warehouse staff
             const warehouseStaff = await User.find({ 
                 role: 'warehouse', 
                 isActive: true 
             });
             
             if (warehouseStaff.length > 0) {
-                console.log(`   📋 Found ${warehouseStaff.length} warehouse staff`);
-                
-                // Send email to ALL warehouse staff
                 await sendEmail({
                     to: warehouseStaff.map(w => w.email),
                     subject: '📦 New Shipment Ready for Warehouse Processing',
                     template: 'new-shipment-warehouse',
                     data: {
                         trackingNumber: trackingNumber,
-                        customerName: booking.customer?.companyName || booking.customer?.firstName || 'Customer',
+                        customerName: booking.sender?.name || 'Customer',
                         origin: booking.shipmentDetails?.origin || 'N/A',
                         destination: booking.shipmentDetails?.destination || 'N/A',
                         packages: packages.length,
                         totalWeight: booking.shipmentDetails?.totalWeight || 0,
                         totalVolume: booking.shipmentDetails?.totalVolume || 0,
-                        shipmentType: booking.shipmentDetails?.shipmentType || 'N/A',
+                        shipmentType: booking.shipmentClassification?.mainType || 'N/A',
                         bookingNumber: booking.bookingNumber,
                         expectedDate: new Date().toLocaleDateString(),
-                        shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`,
-                        warehouseDashboardUrl: `${process.env.FRONTEND_URL}/warehouse/dashboard`
+                        shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`
                     }
                 }).catch(err => console.log('   ⚠️ Warehouse email error:', err.message));
-
-                // ===== ওয়্যারহাউস ট্রিগার - স্টেপ ২: ওয়্যারহাউস ড্যাশবোর্ডে নোটিফিকেশন =====
-                // (এটা রিয়েল-টাইম নোটিফিকেশনের জন্য - যদি Socket.IO ব্যবহার করেন)
-                if (req.io) {
-                    req.io.to('warehouse').emit('new-shipment-ready', {
-                        shipmentId: shipment._id,
-                        trackingNumber: trackingNumber,
-                        customerName: booking.customer?.companyName || booking.customer?.firstName,
-                        message: 'New shipment ready for warehouse receipt'
-                    });
-                    console.log('   🔔 Real-time notification sent to warehouse dashboard');
-                }
-                
-                // ===== ওয়্যারহাউস ট্রিগার - স্টেপ ৩: ওয়্যারহাউস লিডকে SMS (যদি কনফিগার করা থাকে) =====
-                // এটা ঐচ্ছিক - যদি SMS সার্ভিস থাকে
-                /*
-                const warehouseLead = warehouseStaff.find(w => w.isLead === true);
-                if (warehouseLead && warehouseLead.phone) {
-                    await sendSMS({
-                        to: warehouseLead.phone,
-                        message: `New shipment ${trackingNumber} ready for warehouse. Customer: ${booking.customer?.companyName || booking.customer?.firstName}`
-                    });
-                }
-                */
-                
-                console.log('   ✅ Warehouse notifications sent successfully');
-            } else {
-                console.log('   ⚠️ No active warehouse staff found');
-                
-                // Fallback: Send to admins if no warehouse staff
-                const admins = await User.find({ role: 'admin', isActive: true });
-                if (admins.length > 0) {
-                    await sendEmail({
-                        to: admins.map(a => a.email),
-                        subject: '⚠️ New Shipment - No Warehouse Staff Found',
-                        template: 'new-shipment-admin-fallback',
-                        data: {
-                            trackingNumber: trackingNumber,
-                            customerName: booking.customer?.companyName || booking.customer?.firstName,
-                            shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment._id}`
-                        }
-                    });
-                }
             }
 
         } catch (shipmentError) {
             console.error('❌ Shipment creation error:', shipmentError);
-            // Continue even if shipment fails - booking is already confirmed
         }
 
-        // ===== STEP 2: CREATE INVOICE WITH AUTO-GENERATED NUMBER =====
-        console.log('7. Creating invoice with auto-generated number...');
+        // ===== STEP 2: CREATE INVOICE =====
+        console.log('7. Creating invoice...');
 
         let invoice = null;
         try {
-            // Check if Invoice model exists
-            if (!Invoice) {
-                throw new Error('Invoice model not found');
-            }
-
             const breakdown = booking.quotedPrice?.breakdown || {};
             
-            // Prepare charges array from breakdown with exact enum values
             const charges = [];
             
-            // Map breakdown fields to exact enum values
-            if (breakdown.freightCost && breakdown.freightCost > 0) {
-                charges.push({
-                    description: 'Ocean/Air freight transportation charges',
-                    type: 'Freight Cost',
-                    amount: breakdown.freightCost,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.handlingFee && breakdown.handlingFee > 0) {
-                charges.push({
-                    description: 'Cargo handling and processing fee',
-                    type: 'Handling Fee',
-                    amount: breakdown.handlingFee,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.warehouseFee && breakdown.warehouseFee > 0) {
-                charges.push({
-                    description: 'Warehouse storage and consolidation fee',
-                    type: 'Warehouse Fee',
-                    amount: breakdown.warehouseFee,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.customsFee && breakdown.customsFee > 0) {
-                charges.push({
-                    description: 'Customs clearance and processing fee',
-                    type: 'Customs Processing',
-                    amount: breakdown.customsFee,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.insurance && breakdown.insurance > 0) {
-                charges.push({
-                    description: 'Cargo insurance coverage',
-                    type: 'Insurance',
-                    amount: breakdown.insurance,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.documentationFee && breakdown.documentationFee > 0) {
-                charges.push({
-                    description: 'Documentation and paperwork fee',
-                    type: 'Documentation Fee',
-                    amount: breakdown.documentationFee,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.fuelSurcharge && breakdown.fuelSurcharge > 0) {
-                charges.push({
-                    description: 'Fuel surcharge',
-                    type: 'Fuel Surcharge',
-                    amount: breakdown.fuelSurcharge,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.pickupFee && breakdown.pickupFee > 0) {
-                charges.push({
-                    description: 'Pickup fee from origin',
-                    type: 'Pickup Fee',
-                    amount: breakdown.pickupFee,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.deliveryFee && breakdown.deliveryFee > 0) {
-                charges.push({
-                    description: 'Final delivery fee to destination',
-                    type: 'Delivery Fee',
-                    amount: breakdown.deliveryFee,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
-            
-            if (breakdown.otherCharges && breakdown.otherCharges > 0) {
-                charges.push({
-                    description: 'Other miscellaneous charges',
-                    type: 'Other',
-                    amount: breakdown.otherCharges,
-                    currency: booking.quotedPrice?.currency || 'USD'
-                });
-            }
+            const chargeMappings = [
+                { field: 'baseRate', description: 'Base shipping rate', type: 'Freight Cost' },
+                { field: 'weightCharge', description: 'Weight-based charge', type: 'Weight Charge' },
+                { field: 'fuelSurcharge', description: 'Fuel surcharge', type: 'Fuel Surcharge' },
+                { field: 'residentialSurcharge', description: 'Residential delivery surcharge', type: 'Residential Surcharge' },
+                { field: 'insurance', description: 'Cargo insurance', type: 'Insurance' },
+                { field: 'tax', description: 'Tax/VAT', type: 'Tax' },
+                { field: 'otherCharges', description: 'Other miscellaneous charges', type: 'Other' }
+            ];
 
-            // If no charges from breakdown, create a default charge
+            chargeMappings.forEach(mapping => {
+                if (breakdown[mapping.field] && breakdown[mapping.field] > 0) {
+                    charges.push({
+                        description: mapping.description,
+                        type: mapping.type,
+                        amount: breakdown[mapping.field],
+                        currency: booking.quotedPrice?.currency || 'USD'
+                    });
+                }
+            });
+
             if (charges.length === 0 && booking.quotedPrice?.amount) {
                 charges.push({
                     description: 'Total shipping cost including all services',
@@ -591,101 +645,62 @@ exports.acceptQuote = async (req, res) => {
                 });
             }
 
-            // Calculate subtotal
             const subtotal = charges.reduce((sum, charge) => sum + charge.amount, 0);
 
-            // Prepare invoice data
             const invoiceData = {
                 bookingId: booking._id,
                 shipmentId: shipment?._id,
                 customerId: booking.customer._id,
+                
                 customerInfo: {
-                    companyName: booking.customer.companyName || '',
-                    contactPerson: `${booking.customer.firstName || ''} ${booking.customer.lastName || ''}`.trim(),
-                    email: booking.customer.email,
-                    phone: booking.customer.phone || '',
-                    address: booking.deliveryAddress?.addressLine1 || '',
-                    vatNumber: ''
+                    companyName: booking.sender?.companyName || '',
+                    contactPerson: booking.sender?.name || '',
+                    email: booking.sender?.email,
+                    phone: booking.sender?.phone || '',
+                    address: booking.sender?.address?.addressLine1 || ''
                 },
+                
                 invoiceDate: new Date(),
-                dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+                dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                
                 charges: charges,
                 subtotal: subtotal,
-                taxAmount: 0,
-                taxRate: 0,
-                discountAmount: 0,
                 totalAmount: subtotal,
+                
                 currency: booking.quotedPrice?.currency || 'USD',
                 paymentStatus: 'pending',
                 status: 'draft',
                 paymentTerms: 'Due within 30 days',
+                
                 createdBy: req.user._id
             };
 
-            console.log('   Invoice data prepared:', {
-                chargesCount: invoiceData.charges.length,
-                chargeTypes: invoiceData.charges.map(c => c.type),
-                subtotal: invoiceData.subtotal,
-                totalAmount: invoiceData.totalAmount
-            });
-
-            // Save to database
             invoice = await Invoice.create(invoiceData);
             
-            // Update booking with invoice reference
             booking.invoiceId = invoice._id;
             await booking.save();
             
-            console.log('   ✅ Invoice created with auto-generated number:', {
+            console.log('   ✅ Invoice created:', {
                 id: invoice._id,
                 number: invoice.invoiceNumber,
-                amount: invoice.totalAmount,
-                paymentStatus: invoice.paymentStatus
+                amount: invoice.totalAmount
             });
 
         } catch (invoiceError) {
-            console.error('❌ Invoice creation error:', {
-                message: invoiceError.message,
-                code: invoiceError.code,
-                name: invoiceError.name
-            });
-            
-            // Handle duplicate key error specifically
-            if (invoiceError.code === 11000 && invoiceError.keyPattern?.invoiceNumber) {
-                console.log('⚠️ Duplicate invoice number detected, retrying with timestamp...');
-                
-                // Retry with timestamp-based number
-                const timestamp = Date.now().toString().slice(-6);
-                const date = new Date();
-                const year = date.getFullYear().toString().slice(-2);
-                const month = (date.getMonth() + 1).toString().padStart(2, '0');
-                
-                invoiceData.invoiceNumber = `INV-${year}${month}-${timestamp}`;
-                
-                // Try again
-                invoice = await Invoice.create(invoiceData);
-                
-                // Update booking with invoice reference
-                booking.invoiceId = invoice._id;
-                await booking.save();
-                
-                console.log('   ✅ Invoice created on retry:', invoice.invoiceNumber);
-            }
-            
-            // Continue even if invoice fails - booking is already confirmed
+            console.error('❌ Invoice creation error:', invoiceError.message);
         }
 
-        // ===== STEP 3: Send Confirmation Emails =====
+        // ===== STEP 3: Send Emails =====
         console.log('8. Sending confirmation emails...');
 
         // Customer Email
-        if (booking.customer?.email) {
+        if (booking.sender?.email) {
             await sendEmail({
-                to: booking.customer.email,
+                to: booking.sender.email,
                 subject: '🎉 Booking Confirmed! - Cargo Logistics',
                 template: 'booking-confirmed-customer',
                 data: {
-                    customerName: booking.customer.firstName || 'Customer',
+                    customerName: booking.sender?.name || 'Customer',
                     bookingNumber: booking.bookingNumber,
                     trackingNumber: trackingNumber,
                     quotedAmount: booking.quotedPrice?.amount || 0,
@@ -696,9 +711,55 @@ exports.acceptQuote = async (req, res) => {
                     dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
                     origin: booking.shipmentDetails?.origin || 'N/A',
                     destination: booking.shipmentDetails?.destination || 'N/A',
-                    estimatedDelivery: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString()
+                    estimatedDelivery: booking.dates?.estimatedArrival ? 
+                        new Date(booking.dates.estimatedArrival).toLocaleDateString() : 
+                        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString()
                 }
             }).catch(err => console.log('Customer email error:', err.message));
+        }
+
+        // Receiver Email
+        console.log('Sending email to receiver...');
+
+        if (booking.receiver?.email) {
+            try {
+                await sendEmail({
+                    to: booking.receiver.email,
+                    subject: '📦 Your Shipment is Confirmed - Cargo Logistics',
+                    template: 'receiver-shipment-confirmed',
+                    data: {
+                        receiverName: booking.receiver.name || 'Valued Customer',
+                        receiverCompany: booking.receiver.companyName || '',
+                        senderName: booking.sender?.name || 'Our Customer',
+                        senderCompany: booking.sender?.companyName || '',
+                        senderCountry: booking.sender?.address?.country || 'Unknown',
+                        bookingNumber: booking.bookingNumber,
+                        trackingNumber: trackingNumber,
+                        origin: booking.shipmentDetails?.origin || 'Origin',
+                        destination: booking.shipmentDetails?.destination || 'Destination',
+                        totalPackages: booking.shipmentDetails?.totalPackages || 0,
+                        totalWeight: booking.shipmentDetails?.totalWeight || 0,
+                        estimatedDelivery: booking.dates?.estimatedArrival ? 
+                            new Date(booking.dates.estimatedArrival).toLocaleDateString('en-US', {
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric'
+                            }) : 
+                            new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric'
+                            }),
+                        trackingUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/tracking/${trackingNumber}`,
+                        supportEmail: process.env.SUPPORT_EMAIL || 'support@cargologistics.com'
+                    }
+                });
+                console.log('✅ Receiver email sent successfully to:', booking.receiver.email);
+            } catch (emailError) {
+                console.error('❌ Failed to send receiver email:', emailError.message);
+            }
+        } else {
+            console.log('⚠️ No receiver email found for booking:', booking.bookingNumber);
         }
 
         // Admin Emails
@@ -710,7 +771,7 @@ exports.acceptQuote = async (req, res) => {
                 template: 'booking-confirmed-admin',
                 data: {
                     bookingNumber: booking.bookingNumber,
-                    customerName: booking.customer?.companyName || booking.customer?.firstName || 'Customer',
+                    customerName: booking.sender?.name || 'Customer',
                     trackingNumber: trackingNumber,
                     origin: booking.shipmentDetails?.origin || 'N/A',
                     destination: booking.shipmentDetails?.destination || 'N/A',
@@ -721,12 +782,11 @@ exports.acceptQuote = async (req, res) => {
             }).catch(err => console.log('Admin email error:', err.message));
         }
 
-        // ===== STEP 4: Return Success Response =====
         console.log('9. ✅ Accept quote completed successfully');
         
         res.status(200).json({
             success: true,
-            message: 'Booking confirmed successfully. Shipment and invoice created. Warehouse notified.',
+            message: 'Booking confirmed successfully. Shipment and invoice created.',
             data: {
                 booking: {
                     _id: booking._id,
@@ -740,8 +800,7 @@ exports.acceptQuote = async (req, res) => {
                     _id: shipment._id,
                     shipmentNumber: shipment.shipmentNumber,
                     trackingNumber: shipment.trackingNumber,
-                    status: shipment.status,
-                    warehouseNotified: true
+                    status: shipment.status
                 } : null,
                 invoice: invoice ? {
                     _id: invoice._id,
@@ -754,8 +813,6 @@ exports.acceptQuote = async (req, res) => {
 
     } catch (error) {
         console.error('❌ FATAL ERROR:', error);
-        console.error('Error name:', error.name);
-        console.error('Error message:', error.message);
         console.error('Error stack:', error.stack);
         
         res.status(500).json({ 
@@ -765,38 +822,7 @@ exports.acceptQuote = async (req, res) => {
     }
 };
 
-// ========== HELPER FUNCTIONS ==========
-
-// Generate shipment number
-async function generateShipmentNumber() {
-    const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    
-    const count = await Shipment.countDocuments({
-        shipmentNumber: new RegExp(`^SHP-${year}${month}`)
-    });
-    
-    return `SHP-${year}${month}-${(count + 1).toString().padStart(5, '0')}`;
-}
-
-// Make sure this helper function exists at the top of your file or before using it
-
-// Generate invoice number
-async function generateInvoiceNumber() {
-    const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    
-    const count = await Invoice.countDocuments({
-        invoiceNumber: new RegExp(`^INV-${year}${month}`)
-    });
-    
-    const sequence = (count + 1).toString().padStart(5, '0');
-    return `INV-${year}${month}-${sequence}`;
-}
-
-// ========== 6. CUSTOMER REJECT QUOTE ==========
+// ========== 6. REJECT QUOTE (Customer) ==========
 exports.rejectQuote = async (req, res) => {
     try {
         const { id } = req.params;
@@ -812,7 +838,6 @@ exports.rejectQuote = async (req, res) => {
             });
         }
 
-        // Security check
         if (booking.customer._id.toString() !== req.user._id.toString()) {
             return res.status(403).json({ 
                 success: false, 
@@ -827,7 +852,6 @@ exports.rejectQuote = async (req, res) => {
             });
         }
 
-        // Customer rejected
         booking.customerResponse = {
             status: 'rejected',
             respondedAt: new Date(),
@@ -846,7 +870,6 @@ exports.rejectQuote = async (req, res) => {
 
         await booking.save();
 
-        // Notify all admins
         const admins = await User.find({ role: 'admin', isActive: true });
         
         if (admins.length > 0) {
@@ -856,26 +879,27 @@ exports.rejectQuote = async (req, res) => {
                 template: 'quote-rejected',
                 data: {
                     bookingNumber: booking.bookingNumber,
-                    customerName: booking.customer.companyName || `${booking.customer.firstName} ${booking.customer.lastName}`,
+                    customerName: booking.sender?.name || 'Customer',
                     reason: reason || 'No reason provided',
                     dashboardUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`
                 }
             });
         }
 
-        // Send confirmation to customer
-        await sendEmail({
-            to: booking.customer.email,
-            subject: 'Quote Rejection Confirmed',
-            template: 'booking-rejected-customer',
-            data: {
-                bookingNumber: booking.bookingNumber,
-                customerName: booking.customer.firstName,
-                reason: reason || 'No reason provided',
-                dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
-                supportEmail: process.env.SUPPORT_EMAIL
-            }
-        });
+        if (booking.sender?.email) {
+            await sendEmail({
+                to: booking.sender.email,
+                subject: 'Quote Rejection Confirmed',
+                template: 'booking-rejected-customer',
+                data: {
+                    bookingNumber: booking.bookingNumber,
+                    customerName: booking.sender?.name,
+                    reason: reason || 'No reason provided',
+                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
+                    supportEmail: process.env.SUPPORT_EMAIL
+                }
+            });
+        }
 
         res.status(200).json({
             success: true,
@@ -892,7 +916,7 @@ exports.rejectQuote = async (req, res) => {
     }
 };
 
-// ========== 7. CANCEL BOOKING (Customer/Admin) ==========
+// ========== 7. CANCEL BOOKING ==========
 exports.cancelBooking = async (req, res) => {
     try {
         const { id } = req.params;
@@ -908,7 +932,6 @@ exports.cancelBooking = async (req, res) => {
             });
         }
 
-        // Check permission
         if (req.user.role === 'customer' && booking.customer._id.toString() !== req.user._id.toString()) {
             return res.status(403).json({ 
                 success: false, 
@@ -916,7 +939,6 @@ exports.cancelBooking = async (req, res) => {
             });
         }
 
-        // Can only cancel if not already confirmed/shipped
         if (booking.status === 'booking_confirmed') {
             return res.status(400).json({ 
                 success: false, 
@@ -925,7 +947,7 @@ exports.cancelBooking = async (req, res) => {
         }
 
         booking.status = 'cancelled';
-        booking.cancelledAt = new Date();
+        booking.dates.cancelled = new Date();
         booking.cancellationReason = reason;
         
         booking.addTimelineEntry(
@@ -936,7 +958,6 @@ exports.cancelBooking = async (req, res) => {
 
         await booking.save();
 
-        // If cancelled by customer
         if (req.user.role === 'customer') {
             const admins = await User.find({ role: 'admin', isActive: true });
             
@@ -947,41 +968,27 @@ exports.cancelBooking = async (req, res) => {
                     template: 'booking-cancelled',
                     data: {
                         bookingNumber: booking.bookingNumber,
-                        customerName: booking.customer.companyName || `${booking.customer.firstName} ${booking.customer.lastName}`,
+                        customerName: booking.sender?.name || 'Customer',
                         reason: reason || 'No reason provided',
                         dashboardUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`
                     }
                 });
             }
 
-            // Send confirmation to customer
-            await sendEmail({
-                to: booking.customer.email,
-                subject: 'Your Booking Has Been Cancelled',
-                template: 'booking-cancelled-customer',
-                data: {
-                    bookingNumber: booking.bookingNumber,
-                    customerName: booking.customer.firstName,
-                    reason: reason || 'No reason provided',
-                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
-                    supportEmail: process.env.SUPPORT_EMAIL
-                }
-            });
-
-        } else {
-            // If cancelled by admin, notify customer
-            await sendEmail({
-                to: booking.customer.email,
-                subject: 'Your Booking Has Been Cancelled',
-                template: 'booking-cancelled-customer',
-                data: {
-                    bookingNumber: booking.bookingNumber,
-                    customerName: booking.customer.firstName,
-                    reason: reason || 'Cancelled by administrator',
-                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
-                    supportEmail: process.env.SUPPORT_EMAIL
-                }
-            });
+            if (booking.sender?.email) {
+                await sendEmail({
+                    to: booking.sender.email,
+                    subject: 'Your Booking Has Been Cancelled',
+                    template: 'booking-cancelled-customer',
+                    data: {
+                        bookingNumber: booking.bookingNumber,
+                        customerName: booking.sender?.name,
+                        reason: reason || 'No reason provided',
+                        dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`,
+                        supportEmail: process.env.SUPPORT_EMAIL
+                    }
+                });
+            }
         }
 
         res.status(200).json({
@@ -999,32 +1006,16 @@ exports.cancelBooking = async (req, res) => {
     }
 };
 
-// controllers/bookingController.js - এটা যোগ করুন
-
-// ========== GET MY BOOKINGS (Customer) ==========
+// ========== 8. GET MY BOOKINGS (Customer) ==========
 exports.getMyBookings = async (req, res) => {
     try {
-        const { 
-            status, 
-            page = 1, 
-            limit = 10,
-            sort = '-createdAt'
-        } = req.query;
+        const { status, page = 1, limit = 10, sort = '-createdAt' } = req.query;
 
-        // Build query - only show logged in customer's bookings
-        let query = { 
-            customer: req.user._id 
-        };
+        let query = { customer: req.user._id };
+        if (status) query.status = status;
 
-        // Filter by status if provided
-        if (status) {
-            query.status = status;
-        }
-
-        // Get total count for pagination
         const total = await Booking.countDocuments(query);
 
-        // Get bookings with pagination
         const bookings = await Booking.find(query)
             .populate('quotedPrice.quotedBy', 'firstName lastName')
             .populate('shipmentId', 'trackingNumber status')
@@ -1033,7 +1024,6 @@ exports.getMyBookings = async (req, res) => {
             .limit(parseInt(limit))
             .skip((parseInt(page) - 1) * parseInt(limit));
 
-        // Calculate summary statistics for customer
         const summary = {
             total: total,
             activeBookings: await Booking.countDocuments({ 
@@ -1073,18 +1063,18 @@ exports.getMyBookings = async (req, res) => {
     }
 };
 
-// ========== GET MY BOOKING BY ID (Customer) ==========
+// ========== 9. GET MY BOOKING BY ID (Customer) ==========
 exports.getMyBookingById = async (req, res) => {
     try {
         const { id } = req.params;
 
         const booking = await Booking.findOne({
             _id: id,
-            customer: req.user._id  // Ensure it belongs to this customer
+            customer: req.user._id
         })
         .populate('quotedPrice.quotedBy', 'firstName lastName')
-        .populate('shipmentId', 'trackingNumber status milestones transport')
-        .populate('invoiceId', 'invoiceNumber totalAmount currency paymentStatus dueDate')
+        .populate('shipmentId')
+        .populate('invoiceId')
         .populate('timeline.updatedBy', 'firstName lastName role');
 
         if (!booking) {
@@ -1094,19 +1084,11 @@ exports.getMyBookingById = async (req, res) => {
             });
         }
 
-        // Calculate days since booking
         const daysSinceBooking = Math.floor(
             (Date.now() - new Date(booking.createdAt)) / (1000 * 60 * 60 * 24)
         );
 
-        // Check if quote is still valid
         const isQuoteValid = booking.isQuoteValid ? booking.isQuoteValid() : false;
-
-        // Get estimated delivery if shipment exists
-        let estimatedDelivery = null;
-        if (booking.shipmentId && booking.shipmentId.transport) {
-            estimatedDelivery = booking.shipmentId.transport.estimatedArrival;
-        }
 
         res.status(200).json({
             success: true,
@@ -1115,7 +1097,6 @@ exports.getMyBookingById = async (req, res) => {
                 additionalInfo: {
                     daysSinceBooking,
                     isQuoteValid,
-                    estimatedDelivery,
                     canAccept: booking.pricingStatus === 'quoted' && isQuoteValid,
                     canCancel: ['booking_requested', 'price_quoted'].includes(booking.status)
                 }
@@ -1131,7 +1112,7 @@ exports.getMyBookingById = async (req, res) => {
     }
 };
 
-// ========== GET MY BOOKING TIMELINE ==========
+// ========== 10. GET MY BOOKING TIMELINE ==========
 exports.getMyBookingTimeline = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1149,7 +1130,6 @@ exports.getMyBookingTimeline = async (req, res) => {
             });
         }
 
-        // Format timeline for better display
         const timeline = booking.timeline.map(entry => ({
             status: entry.status,
             description: entry.description,
@@ -1178,8 +1158,8 @@ exports.getMyBookingTimeline = async (req, res) => {
     }
 };
 
-// ========== GET MY BOOKING INVOICES ==========
-exports.getMyBookingInvoices = async (req, res) => {
+// ========== 11. GET MY BOOKING INVOICE ==========
+exports.getMyBookingInvoice = async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -1188,7 +1168,7 @@ exports.getMyBookingInvoices = async (req, res) => {
             customer: req.user._id
         }).populate({
             path: 'invoiceId',
-            select: 'invoiceNumber totalAmount currency paymentStatus dueDate createdAt'
+            select: 'invoiceNumber totalAmount currency paymentStatus dueDate createdAt charges'
         });
 
         if (!booking) {
@@ -1211,7 +1191,7 @@ exports.getMyBookingInvoices = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Get booking invoices error:', error);
+        console.error('Get booking invoice error:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -1219,7 +1199,7 @@ exports.getMyBookingInvoices = async (req, res) => {
     }
 };
 
-// ========== GET BOOKING QUOTE DETAILS ==========
+// ========== 12. GET BOOKING QUOTE DETAILS ==========
 exports.getMyBookingQuote = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1245,7 +1225,6 @@ exports.getMyBookingQuote = async (req, res) => {
             });
         }
 
-        // Check if quote is valid
         const isValid = booking.isQuoteValid ? booking.isQuoteValid() : 
             (booking.quotedPrice.validUntil && new Date() <= booking.quotedPrice.validUntil);
 
@@ -1271,29 +1250,21 @@ exports.getMyBookingQuote = async (req, res) => {
     }
 };
 
-// ========== GET MY BOOKINGS SUMMARY (Dashboard) ==========
+// ========== 13. GET MY BOOKINGS SUMMARY (Dashboard) ==========
 exports.getMyBookingsSummary = async (req, res) => {
     try {
         const userId = req.user._id;
 
-        // Get recent bookings (last 5)
         const recentBookings = await Booking.find({ customer: userId })
             .sort('-createdAt')
             .limit(5)
-            .select('bookingNumber status createdAt shipmentDetails.totalCartons');
+            .select('bookingNumber status createdAt shipmentDetails.totalPackages sender receiver');
 
-        // Get counts by status
         const statusCounts = await Booking.aggregate([
             { $match: { customer: userId } },
-            {
-                $group: {
-                    _id: '$status',
-                    count: { $sum: 1 }
-                }
-            }
+            { $group: { _id: '$status', count: { $sum: 1 } } }
         ]);
 
-        // Get pending quote
         const pendingQuote = await Booking.findOne({
             customer: userId,
             pricingStatus: 'quoted',
@@ -1302,16 +1273,14 @@ exports.getMyBookingsSummary = async (req, res) => {
         .sort('-quotedPrice.quotedAt')
         .select('bookingNumber quotedPrice');
 
-        // Get active shipment (if any)
         const activeShipment = await Booking.findOne({
             customer: userId,
             status: 'booking_confirmed',
             shipmentId: { $ne: null }
         })
-        .populate('shipmentId', 'trackingNumber status currentMilestone')
+        .populate('shipmentId', 'trackingNumber status currentLocation')
         .sort('-confirmedAt');
 
-        // Format status counts
         const statusSummary = {
             total: 0,
             requested: 0,
@@ -1349,107 +1318,25 @@ exports.getMyBookingsSummary = async (req, res) => {
     }
 };
 
-// ========== HELPER FUNCTIONS ==========
-
-// Calculate customer total spent
-const calculateCustomerTotalSpent = async (customerId) => {
-    try {
-        const result = await Booking.aggregate([
-            { 
-                $match: { 
-                    customer: customerId,
-                    status: 'delivered',
-                    invoiceId: { $ne: null }
-                } 
-            },
-            {
-                $lookup: {
-                    from: 'invoices',
-                    localField: 'invoiceId',
-                    foreignField: '_id',
-                    as: 'invoice'
-                }
-            },
-            { $unwind: '$invoice' },
-            {
-                $group: {
-                    _id: null,
-                    totalSpent: { $sum: '$invoice.totalAmount' }
-                }
-            }
-        ]);
-
-        return result.length > 0 ? result[0].totalSpent : 0;
-    } catch (error) {
-        console.error('Calculate total spent error:', error);
-        return 0;
-    }
-};
-
-// ========== DOWNLOAD BOOKING DOCUMENT ==========
-exports.downloadBookingDocument = async (req, res) => {
-    try {
-        const { id, documentId } = req.params;
-
-        const booking = await Booking.findOne({
-            _id: id,
-            customer: req.user._id
-        });
-
-        if (!booking) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Booking not found' 
-            });
-        }
-
-        // Find document in booking documents array
-        const document = booking.documents?.id(documentId);
-        
-        if (!document) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Document not found' 
-            });
-        }
-
-        // TODO: Implement actual file download
-        // For now, return document info
-        res.status(200).json({
-            success: true,
-            message: 'Document download will be implemented',
-            data: document
-        });
-
-    } catch (error) {
-        console.error('Download document error:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-};
-// ========== TRACK BY NUMBER (Public) ==========
+// ========== 14. TRACK BY NUMBER (Public) ==========
 exports.trackByNumber = async (req, res) => {
     try {
         const { trackingNumber } = req.params;
 
         console.log('Searching for tracking number:', trackingNumber);
 
-        // First try to find in Booking
         let booking = await Booking.findOne({ trackingNumber })
             .populate({
                 path: 'shipmentId',
-                select: 'status milestones currentMilestone transport trackingNumber'
+                select: 'status milestones currentLocation transport trackingNumber'
             })
-            .select('bookingNumber status shipmentDetails timeline trackingNumber');
+            .select('bookingNumber status shipmentDetails timeline courier currentLocation sender receiver');
 
-        // If not found in Booking, try Shipment
         if (!booking) {
             console.log('Not found in Booking, trying Shipment...');
             
             const shipment = await Shipment.findOne({ trackingNumber })
-                .populate('bookingId', 'bookingNumber customer')
+                .populate('bookingId', 'bookingNumber sender receiver')
                 .select('bookingId status milestones transport trackingNumber');
 
             if (!shipment) {
@@ -1459,9 +1346,8 @@ exports.trackByNumber = async (req, res) => {
                 });
             }
 
-            // Get booking info from shipment
             booking = await Booking.findById(shipment.bookingId)
-                .select('bookingNumber customer shipmentDetails');
+                .select('bookingNumber sender receiver shipmentDetails');
         }
 
         if (!booking) {
@@ -1471,11 +1357,9 @@ exports.trackByNumber = async (req, res) => {
             });
         }
 
-        // Get shipment details
         const shipment = await Shipment.findOne({ trackingNumber })
-            .select('status milestones currentMilestone transport actualDeliveryDate');
+            .select('status milestones currentLocation transport actualDeliveryDate');
 
-        // Format timeline for display
         const timeline = (shipment?.milestones || booking.timeline || []).map(entry => ({
             status: entry.status,
             location: entry.location || 'Unknown',
@@ -1487,22 +1371,29 @@ exports.trackByNumber = async (req, res) => {
             })
         }));
 
-        // Calculate progress percentage
         const progress = calculateProgress(shipment?.status || booking.status);
 
-        // Prepare response
         const trackingInfo = {
             trackingNumber: trackingNumber,
             bookingNumber: booking.bookingNumber,
             status: shipment?.status || booking.status,
+            sender: {
+                name: booking.sender?.name,
+                address: booking.sender?.address
+            },
+            receiver: {
+                name: booking.receiver?.name,
+                address: booking.receiver?.address
+            },
             origin: booking.shipmentDetails?.origin || 'Unknown',
             destination: booking.shipmentDetails?.destination || 'Unknown',
-            currentLocation: shipment?.transport?.currentLocation?.address || 'Unknown',
-            estimatedDelivery: shipment?.transport?.estimatedArrival || null,
+            currentLocation: shipment?.currentLocation?.location || booking.currentLocation?.location || 'Unknown',
+            estimatedDelivery: shipment?.transport?.estimatedArrival || booking.courier?.estimatedDeliveryDate || null,
             actualDelivery: shipment?.actualDeliveryDate || null,
             progress: progress,
             timeline: timeline.sort((a, b) => b.date - a.date),
-            lastUpdate: timeline.length > 0 ? timeline[0].formattedDate : 'No updates yet'
+            lastUpdate: timeline.length > 0 ? timeline[0].formattedDate : 'No updates yet',
+            courier: booking.courier
         };
 
         res.status(200).json({
@@ -1519,24 +1410,134 @@ exports.trackByNumber = async (req, res) => {
     }
 };
 
-// Helper function to calculate progress percentage
-const calculateProgress = (status) => {
-    const statusOrder = [
-        'booking_requested',
-        'price_quoted',
-        'booking_confirmed',
-        'pending',
-        'received_at_warehouse',
-        'consolidation_in_progress',
-        'loaded_in_container',
-        'in_transit',
-        'arrived_at_destination',
-        'customs_clearance',
-        'out_for_delivery',
-        'delivered'
-    ];
+// ========== 15. UPDATE DELIVERY STATUS ==========
+exports.updateDeliveryStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, location, description } = req.body;
 
-    const index = statusOrder.indexOf(status);
-    if (index === -1) return 0;
-    return Math.round((index / (statusOrder.length - 1)) * 100);
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Booking not found' 
+            });
+        }
+
+        booking.updateDeliveryStatus(status, location, req.user._id);
+
+        if (description) {
+            booking.addTimelineEntry(
+                status,
+                description,
+                req.user._id,
+                { location }
+            );
+        }
+
+        await booking.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Delivery status updated successfully',
+            data: {
+                currentLocation: booking.currentLocation,
+                status: booking.status
+            }
+        });
+
+    } catch (error) {
+        console.error('Update delivery status error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
 };
+
+// ========== 16. DOWNLOAD BOOKING DOCUMENT ==========
+exports.downloadBookingDocument = async (req, res) => {
+    try {
+        const { id, documentId } = req.params;
+
+        const booking = await Booking.findOne({
+            _id: id,
+            customer: req.user._id
+        });
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Booking not found' 
+            });
+        }
+
+        const document = booking.documents?.id(documentId);
+        
+        if (!document) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Document not found' 
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Document download will be implemented',
+            data: document
+        });
+
+    } catch (error) {
+        console.error('Download document error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 17. ADD DOCUMENT TO BOOKING ==========
+exports.addDocument = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { type, url } = req.body;
+
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Booking not found' 
+            });
+        }
+
+        if (!booking.documents) {
+            booking.documents = [];
+        }
+
+        booking.documents.push({
+            type,
+            url,
+            uploadedAt: new Date(),
+            uploadedBy: req.user._id
+        });
+
+        await booking.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Document added successfully',
+            data: booking.documents
+        });
+
+    } catch (error) {
+        console.error('Add document error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+module.exports = exports;

@@ -73,39 +73,7 @@ exports.getAllShipments = async (req, res) => {
       error: error.message
     });
   }
-};
-
-// GET SHIPMENT BY ID - বুকিংয়ের মতো
-exports.getShipmentById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const shipment = await Shipment.findById(id)
-      .populate('customerId')
-      .populate('bookingId')
-      .populate('assignedTo', 'firstName lastName email');
-    
-    if (!shipment) {
-      return res.status(404).json({
-        success: false,
-        error: 'Shipment not found'
-      });
-    }
-    
-    res.status(200).json({
-      success: true,
-      data: shipment,
-      message: 'Shipment fetched successfully'
-    });
-    
-  } catch (error) {
-    console.error('Error in getShipmentById:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-};
+}; 
 
 // UPDATE SHIPMENT STATUS - বুকিং স্টেটাস আপডেটের মতো
 exports.updateShipmentStatus = async (req, res) => {
@@ -313,12 +281,12 @@ exports.getShipmentById = async (req, res) => {
     }
 };
 
-// ========== 3. CREATE SHIPMENT (from Booking) ==========
+// ========== 3. CREATE SHIPMENT (from Booking) ========== 
 exports.createShipment = async (req, res) => {
     try {
         const { bookingId } = req.body;
 
-        // Find booking
+        // Find booking with new schema fields
         const booking = await Booking.findById(bookingId)
             .populate('customer', 'firstName lastName companyName email phone address');
 
@@ -344,34 +312,47 @@ exports.createShipment = async (req, res) => {
             trackingNumber = await generateTrackingNumber();
         }
 
-        // Create shipment
+        // Create shipment with new schema fields
         const shipmentData = {
             shipmentNumber: await generateShipmentNumber(),
             trackingNumber: trackingNumber,
             bookingId: booking._id,
             customerId: booking.customer._id,
             shipmentDetails: {
-                shipmentType: booking.shipmentDetails.shipmentType,
-                origin: booking.shipmentDetails.origin,
-                destination: booking.shipmentDetails.destination,
-                shippingMode: booking.shipmentDetails.shippingMode
+                shipmentType: booking.shipmentDetails?.shipmentType,
+                origin: booking.shipmentDetails?.origin,
+                destination: booking.shipmentDetails?.destination,
+                shippingMode: booking.shipmentDetails?.shippingMode
             },
-            pickupAddress: booking.pickupAddress,
-            deliveryAddress: booking.deliveryAddress,
-            packages: booking.shipmentDetails.cargoDetails.map(item => ({
-                packageType: 'Carton',
-                quantity: item.cartons,
+            // নতুন fields
+            sender: booking.sender,
+            receiver: booking.receiver,
+            courier: booking.courier,
+            estimatedDepartureDate: booking.estimatedDepartureDate,
+            estimatedArrivalDate: booking.estimatedArrivalDate,
+            
+            // Packages - cargoDetails থেকে packageDetails
+            packages: (booking.shipmentDetails?.packageDetails || []).map(item => ({
                 description: item.description,
-                weight: item.weight,
-                volume: item.volume,
+                packageType: 'Carton',
+                quantity: item.quantity || 1,
+                weight: item.weight || 0,
+                volume: item.volume || 0,
+                dimensions: item.dimensions || {
+                    length: 0, width: 0, height: 0, unit: 'cm'
+                },
+                productCategory: item.productCategory,
+                hsCode: item.hsCode,
+                value: item.value || { amount: 0, currency: 'USD' },
                 condition: 'Good'
             })),
+            
             status: 'pending',
             createdBy: req.user._id,
             milestones: [{
                 status: 'pending',
-                location: booking.shipmentDetails.origin,
-                description: 'Shipment created and pending warehouse receipt',
+                location: booking.sender?.address?.country || booking.shipmentDetails?.origin || 'Unknown',
+                description: 'Shipment created from confirmed booking',
                 updatedBy: req.user._id,
                 timestamp: new Date()
             }]
@@ -396,9 +377,9 @@ exports.createShipment = async (req, res) => {
                 template: 'new-shipment-warehouse',
                 data: {
                     trackingNumber: shipment.trackingNumber,
-                    customerName: booking.customer.companyName || booking.customer.firstName,
-                    origin: booking.shipmentDetails.origin,
-                    destination: booking.shipmentDetails.destination,
+                    customerName: booking.sender?.name || booking.customer?.companyName || 'Customer',
+                    origin: booking.shipmentDetails?.origin,
+                    destination: booking.shipmentDetails?.destination,
                     packages: shipment.packages.length,
                     shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`
                 }
@@ -412,6 +393,7 @@ exports.createShipment = async (req, res) => {
         });
 
     } catch (error) {
+        console.error('Create shipment error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
@@ -1281,14 +1263,14 @@ exports.getShipmentStatistics = async (req, res) => {
     }
 };
 
-// ========== 23. TRACK BY NUMBER (Public) ==========
+// ========== 23. TRACK BY NUMBER (Public) ========== 
 exports.trackByNumber = async (req, res) => {
     try {
         const { trackingNumber } = req.params;
 
         const shipment = await Shipment.findOne({ trackingNumber })
-            .populate('customerId', 'companyName')
-            .select('trackingNumber status milestones currentMilestone transport packages shipmentDetails actualDeliveryDate');
+            .populate('customerId', 'companyName firstName lastName')
+            .select('trackingNumber status milestones currentMilestone transport packages shipmentDetails actualDeliveryDate sender receiver');
 
         if (!shipment) {
             return res.status(404).json({ 
@@ -1298,7 +1280,7 @@ exports.trackByNumber = async (req, res) => {
         }
 
         // Get latest updates
-        const timeline = shipment.milestones
+        const timeline = (shipment.milestones || [])
             .sort((a, b) => b.timestamp - a.timestamp)
             .slice(0, 10);
 
@@ -1308,16 +1290,25 @@ exports.trackByNumber = async (req, res) => {
                 trackingNumber: shipment.trackingNumber,
                 status: shipment.status,
                 currentMilestone: shipment.currentMilestone,
-                origin: shipment.shipmentDetails.origin,
-                destination: shipment.shipmentDetails.destination,
-                estimatedDelivery: shipment.transport?.estimatedArrival,
+                sender: {
+                    name: shipment.sender?.name,
+                    country: shipment.sender?.address?.country
+                },
+                receiver: {
+                    name: shipment.receiver?.name,
+                    country: shipment.receiver?.address?.country
+                },
+                origin: shipment.shipmentDetails?.origin,
+                destination: shipment.shipmentDetails?.destination,
+                estimatedDelivery: shipment.transport?.estimatedArrival || shipment.estimatedArrivalDate,
                 actualDelivery: shipment.actualDeliveryDate,
                 timeline,
-                progress: shipment.getProgressPercentage?.() || 0
+                progress: shipment.getProgress?.() || 0
             }
         });
 
     } catch (error) {
+        console.error('Track by number error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
