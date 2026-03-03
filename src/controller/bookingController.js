@@ -192,27 +192,40 @@ exports.createBooking = async (req, res) => {
         // Populate customer info
         await booking.populate('customer', 'firstName lastName email companyName phone');
 
-        // Send email to ALL Admins
-        const admins = await User.find({ role: 'admin', isActive: true });
-        const adminEmails = admins.map(admin => admin.email);
+       // Send email to ALL Admins AND SMTP Email
+const admins = await User.find({ role: 'admin', isActive: true });
+const adminEmails = admins.map(admin => admin.email);
 
-        if (adminEmails.length > 0) {
-            await sendEmail({
-                to: adminEmails,
-                subject: '🚨 New Booking Request Received',
-                template: 'new-booking-notification',
-                data: {
-                    bookingNumber: booking.bookingNumber,
-                    customerName: booking.sender?.name || 'Customer',
-                    origin: booking.shipmentDetails?.origin || 'N/A',
-                    destination: booking.shipmentDetails?.destination || 'N/A',
-                    totalPackages: booking.shipmentDetails?.totalPackages || 0,
-                    totalWeight: booking.shipmentDetails?.totalWeight || 0,
-                    bookingUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`,
-                    requestedDate: new Date().toLocaleString()
-                }
-            }).catch(err => console.error('Email error:', err));
+// Combine admin emails with SMTP email
+let allRecipients = [...adminEmails];
+
+// Add the SMTP email (support@cargologisticscompany.com)
+if (process.env.SMTP_USER) {
+    allRecipients.push(process.env.SMTP_USER);
+}
+
+// Remove duplicates (in case support email is also in admin list)
+allRecipients = [...new Set(allRecipients)];
+
+if (allRecipients.length > 0) {
+    await sendEmail({
+        to: allRecipients,  // Now contains both admin emails AND SMTP email
+        subject: '🚨 New Booking Request Received',
+        template: 'new-booking-notification',
+        data: {
+            bookingNumber: booking.bookingNumber,
+            customerName: booking.sender?.name || 'Customer',
+            origin: booking.shipmentDetails?.origin || 'N/A',
+            destination: booking.shipmentDetails?.destination || 'N/A',
+            totalPackages: booking.shipmentDetails?.totalPackages || 0,
+            totalWeight: booking.shipmentDetails?.totalWeight || 0,
+            bookingUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`,
+            requestedDate: new Date().toLocaleString()
         }
+    }).catch(err => console.error('Email error:', err));
+    
+    console.log('✅ Email sent to:', allRecipients);
+}
 
         // Send confirmation to Customer
         if (booking.sender?.email) {
@@ -763,24 +776,39 @@ exports.acceptQuote = async (req, res) => {
         }
 
         // Admin Emails
-        const admins = await User.find({ role: 'admin', isActive: true });
-        if (admins.length > 0) {
-            await sendEmail({
-                to: admins.map(a => a.email),
-                subject: '✅ Booking Confirmed - Action Required',
-                template: 'booking-confirmed-admin',
-                data: {
-                    bookingNumber: booking.bookingNumber,
-                    customerName: booking.sender?.name || 'Customer',
-                    trackingNumber: trackingNumber,
-                    origin: booking.shipmentDetails?.origin || 'N/A',
-                    destination: booking.shipmentDetails?.destination || 'N/A',
-                    shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment?._id || ''}`,
-                    invoiceUrl: `${process.env.FRONTEND_URL}/admin/invoices/${invoice?._id || ''}`,
-                    invoiceNumber: invoice?.invoiceNumber || 'N/A'
-                }
-            }).catch(err => console.log('Admin email error:', err.message));
+       // Get all active admin users
+const admins = await User.find({ role: 'admin', isActive: true });
+
+// Prepare recipients - combine admin emails with SMTP email
+let allRecipients = admins.map(a => a.email);
+
+// Add SMTP email (support@cargologisticscompany.com)
+if (process.env.SMTP_USER) {
+    allRecipients.push(process.env.SMTP_USER);
+}
+
+// Remove duplicates
+allRecipients = [...new Set(allRecipients)];
+
+if (allRecipients.length > 0) {
+    await sendEmail({
+        to: allRecipients,  // এখন এখানে অ্যাডমিন ইমেইল এবং SMTP ইমেইল দুটোই আছে
+        subject: '✅ Booking Confirmed - Action Required',
+        template: 'booking-confirmed-admin',
+        data: {
+            bookingNumber: booking.bookingNumber,
+            customerName: booking.sender?.name || 'Customer',
+            trackingNumber: trackingNumber,
+            origin: booking.shipmentDetails?.origin || 'N/A',
+            destination: booking.shipmentDetails?.destination || 'N/A',
+            shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment?._id || ''}`,
+            invoiceUrl: `${process.env.FRONTEND_URL}/admin/invoices/${invoice?._id || ''}`,
+            invoiceNumber: invoice?.invoiceNumber || 'N/A'
         }
+    }).catch(err => console.log('Admin email error:', err.message));
+    
+    console.log('✅ Booking confirmation email sent to:', allRecipients);
+}
 
         console.log('9. ✅ Accept quote completed successfully');
         
@@ -870,21 +898,35 @@ exports.rejectQuote = async (req, res) => {
 
         await booking.save();
 
-        const admins = await User.find({ role: 'admin', isActive: true });
-        
-        if (admins.length > 0) {
-            await sendEmail({
-                to: admins.map(admin => admin.email),
-                subject: '❌ Quote Rejected by Customer',
-                template: 'quote-rejected',
-                data: {
-                    bookingNumber: booking.bookingNumber,
-                    customerName: booking.sender?.name || 'Customer',
-                    reason: reason || 'No reason provided',
-                    dashboardUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`
-                }
-            });
+        // Get all active admin users
+const admins = await User.find({ role: 'admin', isActive: true });
+
+// Prepare recipients - combine admin emails with SMTP email
+let allRecipients = admins.map(admin => admin.email);
+
+// Add SMTP email (support@cargologisticscompany.com)
+if (process.env.SMTP_USER) {
+    allRecipients.push(process.env.SMTP_USER);
+}
+
+// Remove duplicates
+allRecipients = [...new Set(allRecipients)];
+
+if (allRecipients.length > 0) {
+    await sendEmail({
+        to: allRecipients,  // অ্যাডমিন + SMTP ইমেইল
+        subject: '❌ Quote Rejected by Customer',
+        template: 'quote-rejected',
+        data: {
+            bookingNumber: booking.bookingNumber,
+            customerName: booking.sender?.name || 'Customer',
+            reason: reason || 'No reason provided',
+            dashboardUrl: `${process.env.FRONTEND_URL}/admin/bookings/${booking._id}`
         }
+    }).catch(err => console.log('Quote rejection email error:', err.message));
+    
+    console.log('✅ Quote rejection email sent to:', allRecipients);
+}
 
         if (booking.sender?.email) {
             await sendEmail({
