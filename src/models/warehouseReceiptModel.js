@@ -1,4 +1,4 @@
-// models/warehouseReceiptModel.js
+// models/warehouseReceiptModel.js - আপডেটেড ভার্সন
 
 const mongoose = require('mongoose');
 
@@ -43,19 +43,41 @@ const warehouseReceiptSchema = new mongoose.Schema({
     },
 
     // Cargo Information at Receipt
-    receivedPackages: [{
+    packages: [{
         packageType: {
             type: String,
-            enum: ['Carton', 'Pallet', 'Crate', 'Box', 'Drum', 'Bag', 'Loose'],
-            default: 'Carton'
+            enum: [  // ✅ Inventory-এর সাথে match করুন
+                'pallet', 'carton', 'crate', 'wooden_box', 'container',
+                'envelope', 'loose_cargo', 'loose_tires', '20ft_container', '40ft_container',
+                'Pallet', 'Carton', 'Crate', 'Wooden Box', 'Container',
+                'Envelope', 'Loose Cargo', 'Loose Tires', '20ft Container', '40ft Container',
+                'Box', 'Other'
+            ],
+            default: 'carton'
         },
-        quantity: Number,
+        quantity: {
+            type: Number,
+            required: true,
+            min: 1
+        },
         description: String,
-        weight: Number, // kg
-        volume: Number, // cbm
+        weight: {
+            type: Number,
+            default: 0
+        },
+        volume: {
+            type: Number,
+            default: 0
+        },
+        dimensions: {
+            length: Number,
+            width: Number,
+            height: Number,
+            unit: { type: String, default: 'cm' }
+        },
         condition: {
             type: String,
-            enum: ['Good', 'Damaged', 'Shortage', 'Excess'],
+            enum: ['Good', 'Damaged', 'Partial', 'Shortage', 'Excess'],
             default: 'Good'
         },
         remarks: String
@@ -63,10 +85,10 @@ const warehouseReceiptSchema = new mongoose.Schema({
 
     // Storage Location
     storageLocation: {
-        zone: String,
-        aisle: String,
-        rack: String,
-        bin: String
+        zone: { type: String, required: true },
+        aisle: { type: String, required: true },
+        rack: { type: String, required: true },
+        bin: { type: String, required: true }
     },
 
     // Receipt Status
@@ -91,7 +113,7 @@ const warehouseReceiptSchema = new mongoose.Schema({
         },
         conductedAt: Date,
         findings: String,
-        photos: [String], // URLs to photos
+        photos: [String],
         condition: {
             type: String,
             enum: ['Good', 'Minor Damage', 'Major Damage'],

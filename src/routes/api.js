@@ -5,6 +5,7 @@ const { protect, adminOnly } = require("../middleware/AuthVerifyMiddleWare");
 const bookingController = require('../controller/bookingController');
 const shipmentController = require('../controller/shipmentController');
 const warehouseController = require('../controller/warehouseController');
+const consolidationController = require('../controller/consolidationController');
 const { body } = require('express-validator');
 // ==================== PUBLIC ROUTES (No Authentication Needed) ==================== 
 router.post("/login", userController.loginUser);  
@@ -207,5 +208,13 @@ router.post(
     adminOnly,
     warehouseController.addConsolidationDocuments
 );
+// ========== Queue Routes ==========
+router.get('/queue', protect,consolidationController.getConsolidationQueue);
+router.delete('/queue/:id', protect, consolidationController.removeFromQueue);
 
+// ========== Consolidation Routes ==========
+router.post('/consolidations/create', protect, consolidationController.createConsolidation);
+router.get('/getconsolidations', protect, consolidationController.getConsolidations);
+router.get('/consolidationsById/:id', protect, consolidationController.getConsolidationById);
+router.put('/consolidationsStatus/:id', protect, consolidationController.updateConsolidationStatus);
 module.exports = router;

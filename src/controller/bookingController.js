@@ -440,6 +440,8 @@ exports.updatePriceQuote = async (req, res) => {
 };
 
 // ========== 5. ACCEPT QUOTE (Customer) ==========
+// controllers/bookingController.js - সম্পূর্ণ আপডেটেড Shipment Creation অংশ
+
 exports.acceptQuote = async (req, res) => {
     try {
         const { id } = req.params;
@@ -519,107 +521,220 @@ exports.acceptQuote = async (req, res) => {
         await booking.save();
         console.log('5. Booking saved successfully');
 
-        // ===== STEP 1: CREATE SHIPMENT =====
-        console.log('6. Creating shipment automatically...');
+        // ===== STEP 1: CREATE SHIPMENT (COMPLETE DATA) =====
+        console.log('6. Creating shipment with complete booking data...');
         
         let shipment = null;
         try {
             const shipmentNumber = await generateShipmentNumber();
             
-            // Prepare packages from package details
+            // Log booking data for debugging
+            console.log('📋 Booking Data Summary:', {
+                bookingNumber: booking.bookingNumber,
+                shipmentClassification: booking.shipmentClassification,
+                shipmentDetails: {
+                    origin: booking.shipmentDetails?.origin,
+                    destination: booking.shipmentDetails?.destination,
+                    shippingMode: booking.shipmentDetails?.shippingMode,
+                    totalPackages: booking.shipmentDetails?.totalPackages,
+                    totalWeight: booking.shipmentDetails?.totalWeight,
+                    totalVolume: booking.shipmentDetails?.totalVolume
+                },
+                packageCount: booking.shipmentDetails?.packageDetails?.length || 0
+            });
+
+            // Prepare packages from booking's packageDetails - সব তথ্য সংরক্ষণ
             const packages = (booking.shipmentDetails?.packageDetails || []).map(item => ({
-                packageType: item.packagingType || 'Carton',
-                quantity: item.quantity || 0,
                 description: item.description || '',
+                packagingType: item.packagingType || 'carton',
+                quantity: item.quantity || 1,
                 weight: item.weight || 0,
                 volume: item.volume || 0,
-                dimensions: item.dimensions || {
-                    length: 0,
-                    width: 0,
-                    height: 0,
-                    unit: 'cm'
+                dimensions: {
+                    length: item.dimensions?.length || 0,
+                    width: item.dimensions?.width || 0,
+                    height: item.dimensions?.height || 0,
+                    unit: item.dimensions?.unit || 'cm'
                 },
-                productCategory: item.productCategory,
-                hsCode: item.hsCode,
-                value: item.value,
+                productCategory: item.productCategory || 'Others',
+                hsCode: item.hsCode || '',
+                value: {
+                    amount: item.value?.amount || 0,
+                    currency: item.value?.currency || 'USD'
+                },
+                hazardous: item.hazardous || false,
+                temperatureControlled: {
+                    required: item.temperatureControlled?.required || false,
+                    minTemp: item.temperatureControlled?.minTemp || null,
+                    maxTemp: item.temperatureControlled?.maxTemp || null
+                },
                 condition: 'Good'
             }));
 
+            console.log(`   ✅ Prepared ${packages.length} packages with complete data`);
+
+            // Prepare complete shipment data - Booking-এর সব তথ্য ব্যবহার করে
             const shipmentData = {
+                // Required fields
                 shipmentNumber: shipmentNumber,
                 trackingNumber: trackingNumber,
                 bookingId: booking._id,
                 customerId: booking.customer._id,
-                
-                shipmentClassification: booking.shipmentClassification,
-                
-                shipmentDetails: {
-                    origin: booking.shipmentDetails?.origin,
-                    destination: booking.shipmentDetails?.destination,
-                    shippingMode: booking.shipmentDetails?.shippingMode
-                },
-                
-                sender: booking.sender,
-                receiver: booking.receiver,
-                courier: booking.courier,
-                
-                packages: packages,
-                
-                status: 'pending',
                 createdBy: req.user._id,
                 
+                // Shipment Classification - সম্পূর্ণ Booking থেকে
+                shipmentClassification: {
+                    mainType: booking.shipmentClassification?.mainType || 'air_freight',
+                    subType: booking.shipmentClassification?.subType || 'air_freight'
+                },
+                
+                // Shipment Details - সম্পূর্ণ Booking থেকে
+                shipmentDetails: {
+                    origin: booking.shipmentDetails?.origin || '',
+                    destination: booking.shipmentDetails?.destination || '',
+                    shippingMode: booking.shipmentDetails?.shippingMode || 'DDU',
+                    totalPackages: booking.shipmentDetails?.totalPackages || packages.length,
+                    totalWeight: booking.shipmentDetails?.totalWeight || 0,
+                    totalVolume: booking.shipmentDetails?.totalVolume || 0
+                },
+                
+                // Packages - সম্পূর্ণ ডাটা সহ
+                packages: packages,
+                
+                // Sender Information - সম্পূর্ণ Booking থেকে
+                sender: {
+                    name: booking.sender?.name || '',
+                    companyName: booking.sender?.companyName || '',
+                    email: booking.sender?.email || '',
+                    phone: booking.sender?.phone || '',
+                    address: {
+                        addressLine1: booking.sender?.address?.addressLine1 || '',
+                        addressLine2: booking.sender?.address?.addressLine2 || '',
+                        city: booking.sender?.address?.city || '',
+                        state: booking.sender?.address?.state || '',
+                        country: booking.sender?.address?.country || '',
+                        postalCode: booking.sender?.address?.postalCode || ''
+                    }
+                },
+                
+                // Receiver Information - সম্পূর্ণ Booking থেকে
+                receiver: {
+                    name: booking.receiver?.name || '',
+                    companyName: booking.receiver?.companyName || '',
+                    email: booking.receiver?.email || '',
+                    phone: booking.receiver?.phone || '',
+                    address: {
+                        addressLine1: booking.receiver?.address?.addressLine1 || '',
+                        addressLine2: booking.receiver?.address?.addressLine2 || '',
+                        city: booking.receiver?.address?.city || '',
+                        state: booking.receiver?.address?.state || '',
+                        country: booking.receiver?.address?.country || '',
+                        postalCode: booking.receiver?.address?.postalCode || ''
+                    },
+                    isResidential: booking.receiver?.isResidential || false
+                },
+                
+                // Courier Information - সম্পূর্ণ Booking থেকে
+                courier: {
+                    company: booking.courier?.company || 'Cargo Logistics Group',
+                    serviceType: booking.courier?.serviceType || booking.serviceType || 'standard'
+                },
+                
+                // Dates - সম্পূর্ণ Booking থেকে
+                dates: {
+                    estimatedDeparture: booking.dates?.estimatedDeparture || null,
+                    estimatedArrival: booking.dates?.estimatedArrival || null
+                },
+                
+                // Status
+                status: 'pending',
+                
+                // Transport Details - Booking থেকে নেওয়া (যদি থাকে)
+                transport: {
+                    estimatedDeparture: booking.dates?.estimatedDeparture,
+                    estimatedArrival: booking.dates?.estimatedArrival
+                },
+                
+                // Milestones
                 milestones: [{
                     status: 'pending',
                     location: booking.sender?.address?.country || 'Warehouse',
                     description: 'Shipment created from confirmed booking',
                     updatedBy: req.user._id,
                     timestamp: new Date()
-                }]
+                }],
+                
+                // Reference fields
+                bookingNumber: booking.bookingNumber,
+                serviceType: booking.serviceType
             };
 
-            shipment = await Shipment.create(shipmentData);
+            console.log('   Creating shipment with complete data...');
             
-            booking.shipmentId = shipment._id;
-            await booking.save();
+            shipment = await Shipment.create(shipmentData);
             
             console.log('   ✅ Shipment created successfully:', {
                 id: shipment._id,
                 number: shipment.shipmentNumber,
-                tracking: shipment.trackingNumber
-            });
-
-            // Notify warehouse staff
-            const warehouseStaff = await User.find({ 
-                role: 'warehouse', 
-                isActive: true 
+                tracking: shipment.trackingNumber,
+                packages: shipment.packages?.length,
+                totalWeight: shipment.shipmentDetails?.totalWeight
             });
             
-            if (warehouseStaff.length > 0) {
-                await sendEmail({
-                    to: warehouseStaff.map(w => w.email),
-                    subject: '📦 New Shipment Ready for Warehouse Processing',
-                    template: 'new-shipment-warehouse',
-                    data: {
-                        trackingNumber: trackingNumber,
-                        customerName: booking.sender?.name || 'Customer',
-                        origin: booking.shipmentDetails?.origin || 'N/A',
-                        destination: booking.shipmentDetails?.destination || 'N/A',
-                        packages: packages.length,
-                        totalWeight: booking.shipmentDetails?.totalWeight || 0,
-                        totalVolume: booking.shipmentDetails?.totalVolume || 0,
-                        shipmentType: booking.shipmentClassification?.mainType || 'N/A',
-                        bookingNumber: booking.bookingNumber,
-                        expectedDate: new Date().toLocaleDateString(),
-                        shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`
-                    }
-                }).catch(err => console.log('   ⚠️ Warehouse email error:', err.message));
+            // Update booking with shipment ID
+            booking.shipmentId = shipment._id;
+            await booking.save();
+            
+            console.log('   ✅ Booking updated with shipment ID');
+
+            // Notify warehouse staff (optional)
+            try {
+                const warehouseStaff = await User.find({ 
+                    role: 'warehouse', 
+                    isActive: true 
+                });
+                
+                if (warehouseStaff.length > 0) {
+                    await sendEmail({
+                        to: warehouseStaff.map(w => w.email),
+                        subject: '📦 New Shipment Ready for Warehouse Processing',
+                        template: 'new-shipment-warehouse',
+                        data: {
+                            trackingNumber: trackingNumber,
+                            customerName: booking.sender?.name || 'Customer',
+                            origin: booking.shipmentDetails?.origin || 'N/A',
+                            destination: booking.shipmentDetails?.destination || 'N/A',
+                            packages: packages.length,
+                            totalWeight: booking.shipmentDetails?.totalWeight || 0,
+                            totalVolume: booking.shipmentDetails?.totalVolume || 0,
+                            shipmentType: booking.shipmentClassification?.mainType || 'N/A',
+                            bookingNumber: booking.bookingNumber,
+                            expectedDate: new Date(booking.dates?.estimatedArrival || Date.now()).toLocaleDateString(),
+                            shipmentUrl: `${process.env.FRONTEND_URL}/warehouse/shipments/${shipment._id}`
+                        }
+                    }).catch(err => console.log('   ⚠️ Warehouse email error:', err.message));
+                }
+            } catch (staffError) {
+                console.log('   ⚠️ Error notifying warehouse staff:', staffError.message);
             }
 
         } catch (shipmentError) {
             console.error('❌ Shipment creation error:', shipmentError);
+            
+            if (shipmentError.name === 'ValidationError') {
+                console.error('   Validation errors:');
+                Object.keys(shipmentError.errors).forEach(key => {
+                    console.error(`   - ${key}: ${shipmentError.errors[key].message}`);
+                    console.error(`     Value:`, shipmentError.errors[key].value);
+                });
+            }
+            
+            if (shipmentError.code === 11000) {
+                console.error('   Duplicate key error:', shipmentError.keyValue);
+            }
         }
 
-        // ===== STEP 2: CREATE INVOICE =====
+        // ===== STEP 2: CREATE INVOICE (আগের মতই) =====
         console.log('7. Creating invoice...');
 
         let invoice = null;
@@ -703,7 +818,7 @@ exports.acceptQuote = async (req, res) => {
             console.error('❌ Invoice creation error:', invoiceError.message);
         }
 
-        // ===== STEP 3: Send Emails =====
+        // ===== STEP 3: Send Emails (আগের মতই) =====
         console.log('8. Sending confirmation emails...');
 
         // Customer Email
@@ -732,8 +847,6 @@ exports.acceptQuote = async (req, res) => {
         }
 
         // Receiver Email
-        console.log('Sending email to receiver...');
-
         if (booking.receiver?.email) {
             try {
                 await sendEmail({
@@ -771,44 +884,37 @@ exports.acceptQuote = async (req, res) => {
             } catch (emailError) {
                 console.error('❌ Failed to send receiver email:', emailError.message);
             }
-        } else {
-            console.log('⚠️ No receiver email found for booking:', booking.bookingNumber);
         }
 
         // Admin Emails
-       // Get all active admin users
-const admins = await User.find({ role: 'admin', isActive: true });
-
-// Prepare recipients - combine admin emails with SMTP email
-let allRecipients = admins.map(a => a.email);
-
-// Add SMTP email (support@cargologisticscompany.com)
-if (process.env.SMTP_USER) {
-    allRecipients.push(process.env.SMTP_USER);
-}
-
-// Remove duplicates
-allRecipients = [...new Set(allRecipients)];
-
-if (allRecipients.length > 0) {
-    await sendEmail({
-        to: allRecipients,  // এখন এখানে অ্যাডমিন ইমেইল এবং SMTP ইমেইল দুটোই আছে
-        subject: '✅ Booking Confirmed - Action Required',
-        template: 'booking-confirmed-admin',
-        data: {
-            bookingNumber: booking.bookingNumber,
-            customerName: booking.sender?.name || 'Customer',
-            trackingNumber: trackingNumber,
-            origin: booking.shipmentDetails?.origin || 'N/A',
-            destination: booking.shipmentDetails?.destination || 'N/A',
-            shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment?._id || ''}`,
-            invoiceUrl: `${process.env.FRONTEND_URL}/admin/invoices/${invoice?._id || ''}`,
-            invoiceNumber: invoice?.invoiceNumber || 'N/A'
+        const admins = await User.find({ role: 'admin', isActive: true });
+        let allRecipients = admins.map(a => a.email);
+        
+        if (process.env.SMTP_USER) {
+            allRecipients.push(process.env.SMTP_USER);
         }
-    }).catch(err => console.log('Admin email error:', err.message));
-    
-    console.log('✅ Booking confirmation email sent to:', allRecipients);
-}
+        
+        allRecipients = [...new Set(allRecipients)];
+
+        if (allRecipients.length > 0) {
+            await sendEmail({
+                to: allRecipients,
+                subject: '✅ Booking Confirmed - Action Required',
+                template: 'booking-confirmed-admin',
+                data: {
+                    bookingNumber: booking.bookingNumber,
+                    customerName: booking.sender?.name || 'Customer',
+                    trackingNumber: trackingNumber,
+                    origin: booking.shipmentDetails?.origin || 'N/A',
+                    destination: booking.shipmentDetails?.destination || 'N/A',
+                    shipmentUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment?._id || ''}`,
+                    invoiceUrl: `${process.env.FRONTEND_URL}/admin/invoices/${invoice?._id || ''}`,
+                    invoiceNumber: invoice?.invoiceNumber || 'N/A'
+                }
+            }).catch(err => console.log('Admin email error:', err.message));
+            
+            console.log('✅ Booking confirmation email sent to:', allRecipients);
+        }
 
         console.log('9. ✅ Accept quote completed successfully');
         

@@ -1,11 +1,13 @@
 // controllers/warehouseController.js
 
+const mongoose = require('mongoose'); 
 const Warehouse = require('../models/warehouseModel');
 const WarehouseReceipt = require('../models/warehouseReceiptModel');
 const WarehouseInventory = require('../models/warehouseInventoryModel');
 const Consolidation = require('../models/consolidationModel');
 const Shipment = require('../models/shipmentModel');
 const Booking = require('../models/bookingModel');
+const ConsolidationQueue = require('../models/consolidationQueueModel'); 
 const User = require('../models/userModel');
 const { sendEmail } = require('../utils/emailService');
 
@@ -44,23 +46,29 @@ exports.getExpectedShipments = async (req, res) => {
     }
 };
 
-// ========== 2. RECEIVE SHIPMENT AT WAREHOUSE ==========
+// ========== 2. RECEIVE SHIPMENT AT WAREHOUSE ==========    
+
 exports.receiveShipment = async (req, res) => {
     try {
         const { shipmentId } = req.params;
-        const {
-            receivedPackages,
-            storageLocation,
-            condition,
-            notes,
-            warehouseId
-        } = req.body;
+        const { location, notes, packages, condition, receivedAt } = req.body;
 
-        console.log('📦 Receiving shipment:', shipmentId);
+        if (!shipmentId || !location || !packages || packages.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields'
+            });
+        }
 
-        // Find shipment
+        if (!req.user?._id) {
+            return res.status(401).json({
+                success: false,
+                error: 'User not authenticated'
+            });
+        }
+
         const shipment = await Shipment.findById(shipmentId)
-            .populate('customerId', 'email firstName lastName companyName')
+            .populate('customerId')
             .populate('bookingId');
 
         if (!shipment) {
@@ -70,158 +78,197 @@ exports.receiveShipment = async (req, res) => {
             });
         }
 
-        // Check if already received
-        const existingReceipt = await WarehouseReceipt.findOne({ shipmentId });
-        if (existingReceipt) {
+        // Parse location
+        const locationParts = location.split('-');
+        if (locationParts.length !== 4) {
             return res.status(400).json({
                 success: false,
-                message: 'Shipment already received at warehouse'
+                error: 'Invalid location format. Use Zone-Aisle-Rack-Bin'
             });
         }
 
-        // ===== STEP 1: Create Warehouse Receipt =====
-        const receiptData = {
-            shipmentId: shipment._id,
-            bookingId: shipment.bookingId._id,
-            customerId: shipment.customerId._id,
-            warehouseId: warehouseId || req.user.warehouseId,
-            receivedDate: new Date(),
-            receivedBy: req.user._id,
-            receivedPackages: receivedPackages || shipment.packages,
-            storageLocation: storageLocation || {
-                zone: 'A',
-                aisle: '1',
-                rack: '1',
-                bin: '1'
-            },
-            status: condition === 'Good' ? 'received' : 'inspected',
-            inspection: {
-                conductedBy: req.user._id,
-                conductedAt: new Date(),
-                condition: condition || 'Good',
-                findings: notes || ''
-            },
-            notes: notes,
-            createdBy: req.user._id
+        const storageLocation = {
+            zone: locationParts[0],
+            aisle: locationParts[1],
+            rack: locationParts[2],
+            bin: locationParts[3]
         };
 
-        const receipt = await WarehouseReceipt.create(receiptData);
-        console.log('✅ Receipt created:', receipt.receiptNumber);
-
-        // ===== STEP 2: Create Inventory Items =====
-        const inventoryItems = [];
-        
-        for (const pkg of (receivedPackages || shipment.packages)) {
-            for (let i = 0; i < (pkg.quantity || 1); i++) {
-                const inventoryItem = await WarehouseInventory.create({
-                    shipmentId: shipment._id,
-                    bookingId: shipment.bookingId._id,
-                    warehouseId: warehouseId || req.user.warehouseId,
-                    packageType: pkg.packageType || 'Carton',
-                    packageId: `${shipment.trackingNumber}-${i + 1}`,
-                    quantity: 1,
-                    description: pkg.description || 'Cargo',
-                    weight: pkg.weight || 0,
-                    volume: pkg.volume || 0,
-                    dimensions: pkg.dimensions || {},
-                    location: storageLocation || {
-                        zone: 'A',
-                        aisle: '1',
-                        rack: '1',
-                        bin: '1'
-                    },
-                    status: condition === 'Good' ? 'received' : 'inspected',
-                    receivedAt: new Date(),
-                    createdBy: req.user._id
-                });
-                inventoryItems.push(inventoryItem);
-            }
+        // Get or create warehouse
+        let warehouse = await Warehouse.findOne({ isActive: true });
+        if (!warehouse) {
+            warehouse = await Warehouse.create({
+                warehouseName: 'Main Warehouse',
+                warehouseCode: 'WH001',
+                isActive: true,
+                createdBy: req.user._id
+            });
         }
-        console.log(`✅ ${inventoryItems.length} inventory items created`);
 
-        // ===== STEP 3: Update Shipment Status =====
-        shipment.status = condition === 'Good' ? 'received_at_warehouse' : 'damaged_report';
-        shipment.warehouseInfo = {
-            receivedDate: new Date(),
-            receivedBy: req.user._id,
-            location: storageLocation?.zone || 'A',
-            receiptId: receipt._id,
-            notes: notes
-        };
+        // 🔥 FIXED: Declare once
+        let mappedPackages = packages.map(pkg => ({
+            description: pkg.description || 'Package',
+            packagingType: pkg.packagingType,
+            quantity: pkg.quantity || 1,
+            weight: pkg.weight || 0,
+            volume: pkg.volume || 0,
+            condition: pkg.condition || condition || 'Good',
+            storageLocation,
+            packageId: pkg._id || new mongoose.Types.ObjectId()
+        }));
 
-        // Add milestone
+        // =========================================
+        // STEP 1: Check existing receipt
+        // =========================================
+        let receipt = await WarehouseReceipt.findOne({ shipmentId: shipment._id });
+
+        if (receipt) {
+            receipt.receivedAt = receivedAt || new Date();
+            receipt.receivedBy = req.user._id;
+            receipt.condition = condition || 'Good';
+            receipt.remarks = notes || receipt.remarks;
+            receipt.packages = mappedPackages;
+            receipt.storageLocation = storageLocation;
+            receipt.updatedBy = req.user._id;
+            receipt.updatedAt = new Date();
+
+            await receipt.save();
+        } else {
+            // Generate unique receipt number
+            let receiptNumber;
+            let isUnique = false;
+            let attempts = 0;
+
+            while (!isUnique && attempts < 5) {
+                attempts++;
+                const date = new Date();
+                const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+                receiptNumber = `WR-${date.getFullYear()}-${date.getMonth() + 1}${date.getDate()}-${random}`;
+
+                const existing = await WarehouseReceipt.findOne({ receiptNumber });
+                if (!existing) isUnique = true;
+            }
+
+            if (!isUnique) {
+                receiptNumber = `WR-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+            }
+
+            receipt = new WarehouseReceipt({
+                receiptNumber,
+                shipmentId: shipment._id,
+                bookingId: shipment.bookingId?._id,
+                warehouseId: warehouse._id,
+                customerId: shipment.customerId?._id,
+                receivedBy: req.user._id,
+                receivedAt: receivedAt || new Date(),
+                packages: mappedPackages,
+                condition: condition || 'Good',
+                remarks: notes || '',
+                storageLocation,
+                createdBy: req.user._id,
+                createdAt: new Date()
+            });
+
+            await receipt.save();
+        }
+
+        // =========================================
+        // STEP 2: Recreate inventory (clean way)
+        // =========================================
+        await WarehouseInventory.deleteMany({ shipmentId: shipment._id });
+
+        for (const pkg of mappedPackages) {
+            const inventoryItem = new WarehouseInventory({
+                warehouseId: warehouse._id,
+                shipmentId: shipment._id,
+                receiptId: receipt._id,
+                bookingId: shipment.bookingId?._id,
+                customerId: shipment.customerId?._id,
+                packageId: pkg.packageId,
+                packageType: pkg.packagingType,
+                quantity: pkg.quantity,
+                weight: pkg.weight,
+                volume: pkg.volume,
+                location: storageLocation,
+                status: condition === 'Damaged' ? 'damaged' : 'stored',
+                condition: pkg.condition,
+                notes: notes || '',
+                receivedAt: receivedAt || new Date(),
+                receivedBy: req.user._id,
+                createdBy: req.user._id,
+                createdAt: new Date()
+            });
+
+            await inventoryItem.save();
+        }
+
+        // =========================================
+        // STEP 3: Update shipment
+        // =========================================
+        shipment.status = 'received_at_warehouse';
+        shipment.receiptId = receipt._id;
+        shipment.receiptNumber = receipt.receiptNumber;
+        shipment.receivedAt = receivedAt || new Date();
+        shipment.receivedBy = req.user._id;
+        shipment.storageLocation = location;
+        shipment.receivingNotes = notes;
+        shipment.receivingCondition = condition || 'Good';
+
+        shipment.milestones = shipment.milestones || [];
         shipment.milestones.push({
             status: 'received_at_warehouse',
-            location: storageLocation?.zone || 'Warehouse',
-            description: `Shipment received at warehouse. ${condition === 'Good' ? 'All good' : 'Issues found: ' + condition}`,
-            updatedBy: req.user._id,
-            timestamp: new Date()
+            location,
+            description: `Shipment received. Receipt: ${receipt.receiptNumber}`,
+            timestamp: new Date(),
+            updatedBy: req.user._id
         });
 
         await shipment.save();
-        console.log('✅ Shipment status updated');
 
-        // ===== STEP 4: Notify Customer =====
-        if (shipment.customerId && shipment.customerId.email) {
-            await sendEmail({
-                to: shipment.customerId.email,
-                subject: '📦 Your Shipment Has Reached Our Warehouse',
-                template: 'shipment-received-warehouse',
-                data: {
-                    customerName: shipment.customerId.firstName || 'Customer',
-                    trackingNumber: shipment.trackingNumber,
-                    receiptNumber: receipt.receiptNumber,
-                    receivedDate: new Date().toLocaleDateString(),
-                    packages: receivedPackages?.length || shipment.packages?.length,
-                    condition: condition || 'Good',
-                    trackingUrl: `${process.env.FRONTEND_URL}/tracking/${shipment.trackingNumber}`,
-                    dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`
-                }
-            }).catch(err => console.log('Customer email error:', err.message));
-        }
-
-        // ===== STEP 5: Notify Admin =====
-        const admins = await User.find({ role: 'admin', isActive: true });
-        if (admins.length > 0) {
-            await sendEmail({
-                to: admins.map(a => a.email),
-                subject: '📦 Shipment Received at Warehouse',
-                template: 'warehouse-receipt-notification',
-                data: {
-                    trackingNumber: shipment.trackingNumber,
-                    customerName: shipment.customerId?.companyName || 'Customer',
-                    receiptNumber: receipt.receiptNumber,
-                    warehouseId: warehouseId || 'Main Warehouse',
-                    dashboardUrl: `${process.env.FRONTEND_URL}/admin/shipments/${shipment._id}`
-                }
-            }).catch(err => console.log('Admin email error:', err.message));
-        }
-
-        // ===== STEP 6: Return Response =====
+        // =========================================
+        // SUCCESS RESPONSE
+        // =========================================
         res.status(200).json({
             success: true,
-            message: 'Shipment received at warehouse successfully',
+            message: 'Shipment received successfully',
             data: {
-                receipt: {
-                    _id: receipt._id,
-                    receiptNumber: receipt.receiptNumber,
-                    receivedDate: receipt.receivedDate
-                },
-                inventoryItems: inventoryItems.length,
-                shipment: {
-                    _id: shipment._id,
-                    trackingNumber: shipment.trackingNumber,
-                    status: shipment.status
-                }
+                shipmentId: shipment._id,
+                trackingNumber: shipment.trackingNumber,
+                receiptNumber: receipt.receiptNumber,
+                status: shipment.status,
+                receivedAt: shipment.receivedAt,
+                location,
+                packagesReceived: mappedPackages.length,
+                inventoryCreated: mappedPackages.length,
+                packages: receipt.packages,
+                createdBy: req.user._id
             }
         });
 
     } catch (error) {
-        console.error('❌ Receive shipment error:', error);
-        res.status(500).json({ success: false, error: error.message });
+        console.error('❌ ERROR:', error);
+
+        if (error.code === 11000) {
+            return res.status(400).json({
+                success: false,
+                error: 'Duplicate receipt number'
+            });
+        }
+
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                error: 'Validation failed',
+                details: error.errors
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
     }
 };
-
 // ========== 3. GET WAREHOUSE RECEIPTS ==========
 exports.getWarehouseReceipts = async (req, res) => {
     try {
@@ -893,13 +940,16 @@ exports.createWarehouse = async (req, res) => {
 };
 
 // ========== 17. INSPECT RECEIVED SHIPMENT ==========
+// ========== INSPECT SHIPMENT FUNCTION ==========
 exports.inspectShipment = async (req, res) => {
     try {
         const { receiptId } = req.params;
-        const { condition, findings, photos } = req.body;
+        const inspectionData = req.body;
 
+        // Find receipt
         const receipt = await WarehouseReceipt.findById(receiptId)
-            .populate('shipmentId');
+            .populate('shipmentId')
+            .populate('customerId');
 
         if (!receipt) {
             return res.status(404).json({
@@ -908,50 +958,108 @@ exports.inspectShipment = async (req, res) => {
             });
         }
 
-        // Update receipt
-        receipt.status = 'inspected';
+        // Update receipt with inspection
         receipt.inspection = {
             conductedBy: req.user._id,
             conductedAt: new Date(),
-            condition,
-            findings,
-            photos: photos || []
+            condition: inspectionData.condition,
+            findings: inspectionData.findings,
+            photos: inspectionData.photos || [],
+            disposition: inspectionData.disposition,
+            details: inspectionData.details,
+            summary: inspectionData.summary
         };
-
+        receipt.status = 'inspected';
         await receipt.save();
 
-        // Update inventory items
-        await WarehouseInventory.updateMany(
-            { shipmentId: receipt.shipmentId._id },
-            { 
-                $set: { 
-                    status: condition === 'Good' ? 'stored' : 'damaged',
-                    condition: condition
-                }
-            }
-        );
-
-        // Update shipment if damaged
-        if (condition !== 'Good') {
-            const shipment = await Shipment.findById(receipt.shipmentId._id);
-            shipment.status = 'damaged_report';
-            shipment.milestones.push({
-                status: 'damaged_report',
-                location: 'Warehouse',
-                description: `Inspection found: ${findings || condition}`,
-                updatedBy: req.user._id,
-                timestamp: new Date()
+        // ============================================
+        // 🟢 Add to Consolidation Queue if Good
+        // ============================================
+        
+        if (inspectionData.condition === 'Good') {
+            const shipment = receipt.shipmentId;
+            
+            // Get origin and destination
+            const origin = shipment.shipmentDetails?.origin || 'Unknown';
+            const destination = shipment.shipmentDetails?.destination || 'Unknown';
+            
+            // Create group key for destination-wise grouping
+            // Format: "ORIGIN→DESTINATION" (e.g., "China→USA")
+            const groupKey = `${origin}→${destination}`;
+            
+            // Check if already in queue
+            const existingInQueue = await ConsolidationQueue.findOne({
+                shipmentId: shipment._id,
+                status: { $in: ['pending', 'assigned'] }
             });
-            await shipment.save();
+            
+            if (!existingInQueue) {
+                // Calculate totals
+                let totalWeight = 0;
+                let totalVolume = 0;
+                let totalPackages = 0;
+                
+                receipt.packages.forEach((pkg, idx) => {
+                    const qty = inspectionData.details[idx]?.passed || pkg.quantity || 1;
+                    totalPackages += qty;
+                    totalWeight += (pkg.weight || 0) * qty;
+                    totalVolume += (pkg.volume || 0) * qty;
+                });
+                
+                // Add to queue with group key
+                await ConsolidationQueue.create({
+                    shipmentId: shipment._id,
+                    receiptId: receipt._id,
+                    warehouseId: receipt.warehouseId,
+                    customerId: receipt.customerId?._id,
+                    trackingNumber: shipment.trackingNumber,
+                    origin: origin,
+                    destination: destination,
+                    destinationCountry: shipment.shipmentDetails?.destinationCountry,
+                    groupKey: groupKey,  // ← Important for grouping
+                    packages: receipt.packages.map((pkg, idx) => ({
+                        description: pkg.description,
+                        packagingType: pkg.packagingType,
+                        quantity: inspectionData.details[idx]?.passed || pkg.quantity,
+                        weight: pkg.weight,
+                        volume: pkg.volume,
+                        condition: 'Good'
+                    })),
+                    totalWeight,
+                    totalVolume,
+                    totalPackages,
+                    status: 'pending',
+                    addedBy: req.user._id,
+                    addedAt: new Date(),
+                    priority: 0
+                });
+                
+                console.log(`✅ Shipment ${shipment.trackingNumber} added to queue`);
+                console.log(`   Group: ${groupKey}`);
+                
+                // Update shipment status
+                shipment.warehouseStatus = 'ready_for_consolidation';
+                await shipment.save();
+            }
         }
 
         res.status(200).json({
             success: true,
-            message: 'Inspection completed',
-            data: receipt
+            message: 'Inspection completed successfully',
+            data: {
+                receipt,
+                condition: inspectionData.condition,
+                addedToQueue: inspectionData.condition === 'Good',
+                groupKey: inspectionData.condition === 'Good' ? 
+                    `${receipt.shipmentId?.shipmentDetails?.origin}→${receipt.shipmentId?.shipmentDetails?.destination}` : null
+            }
         });
 
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        console.error('Inspect shipment error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
     }
 };

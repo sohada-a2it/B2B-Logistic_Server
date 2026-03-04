@@ -1,67 +1,129 @@
-// models/shipmentModel.js - আপডেটেড ভার্সন
+// models/shipmentModel.js - Booking Model-এর সাথে সামঞ্জস্যপূর্ণ ভার্সন
 
 const mongoose = require('mongoose');
 
-// Enums
-const shipmentStatuses = [
-    'pending',
-    'received_at_warehouse',
-    'consolidation_in_progress',
-    'loaded_in_container',
-    'in_transit',
-    'arrived_at_destination',
-    'customs_clearance',
-    'out_for_delivery',
-    'delivered',
-    'cancelled',
-    'returned'
+// ==================== ENUMS (Booking থেকে নেওয়া) ====================
+
+// Shipment Types (Main Category) - Booking-এর সাথে মিল রেখে
+const shipmentTypes = ['sea_freight', 'air_freight', 'inland_trucking', 'multimodal'];
+
+// Shipment Sub Types - Booking-এর সাথে মিল রেখে
+const shipmentSubTypes = [
+    'sea_freight_fcl',      // Full Container Load
+    'sea_freight_lcl',      // Less than Container Load
+    'air_freight',          // Air Freight
+    'rail_freight',         // Rail Freight
+    'express_delivery',     // Express Delivery
+    'inland_transport',     // Inland Transport
+    'door_to_door'          // Door to Door
 ];
 
-// Package Schema - Booking-এর packageDetails-এর সাথে মিল রেখে
+// Shipment Status (Booking-এর shipmentStatuses থেকে)
+const shipmentStatuses = [
+    'pending',
+    'picked_up_from_warehouse',
+    'departed_port_of_origin',
+    'in_transit_sea_freight',
+    'arrived_at_destination_port',
+    'customs_cleared',
+    'out_for_delivery',
+    'delivered',
+    'on_hold',
+    'cancelled',
+    'returned',
+    'received_at_warehouse'
+];
+
+// Shipping Modes (Incoterms) - Booking-এর সাথে মিল রেখে
+const shippingModes = ['DDP', 'DDU', 'FOB', 'CIF'];
+
+// Currencies - Booking-এর সাথে মিল রেখে
+const currencies = ['USD', 'GBP', 'CAD', 'THB', 'CNY', 'EUR', 'BDT'];
+
+// Courier Service Types - Booking-এর সাথে মিল রেখে
+const courierServiceTypes = ['standard', 'express', 'overnight', 'economy'];
+
+// Origins - Booking-এর সাথে মিল রেখে
+const origins = ['China Warehouse', 'Thailand Warehouse'];
+
+// Destinations - Booking-এর সাথে মিল রেখে
+const destinations = ['USA', 'UK', 'Canada'];
+
+// ==================== PACKAGE SCHEMA ====================
+// Booking-এর packageItemSchema-এর সাথে মিল রেখে
 const packageSchema = new mongoose.Schema({
-    description: String,           // Booking থেকে আসবে
-    packageType: {
+    description: {
         type: String,
-        enum: ['Pallet', 'Carton', 'Crate', 'Box', 'Container'],
-        default: 'Carton'
+        required: [true, 'Package description is required']
+    },
+    packagingType: {
+        type: String,
+        enum: [          // Booking-এর packagingTypes থেকে
+            'pallet', 'carton', 'crate', 'wooden_box', 'container',
+            'envelope', 'loose_cargo', 'loose_tires', '20ft_container', '40ft_container'
+        ],
+        default: 'carton'
     },
     quantity: {
         type: Number,
         required: true,
-        min: 1
+        min: [1, 'Minimum 1 item required']
     },
     weight: {
         type: Number,
         required: true,
-        min: 0
+        min: [0, 'Weight cannot be negative']
     },
     volume: {
         type: Number,
         required: true,
-        min: 0
+        min: [0, 'Volume cannot be negative']
     },
-    dimensions: {                   // Booking থেকে আসবে
-        length: Number,
-        width: Number,
-        height: Number,
-        unit: { type: String, default: 'cm' }
+    dimensions: {
+        length: { type: Number, required: true },
+        width: { type: Number, required: true },
+        height: { type: Number, required: true },
+        unit: { type: String, enum: ['cm', 'in'], default: 'cm' }
     },
-    productCategory: String,        // Booking থেকে আসবে
-    hsCode: String,                  // Booking থেকে আসবে
-    value: {                         // Booking থেকে আসবে
-        amount: Number,
-        currency: { type: String, default: 'USD' }
+    productCategory: {
+        type: String,
+        enum: [           // Booking-এর productCategory থেকে
+            'Electronics', 'Furniture', 'Clothing', 'Machinery', 
+            'Automotive', 'Pharmaceuticals', 'Food', 'Documents', 
+            'Tires', 'Chemicals', 'Others'
+        ]
     },
-    warehouseLocation: String,
+    hsCode: String,
+    value: {
+        amount: {
+            type: Number,
+            default: 0
+        },
+        currency: {
+            type: String,
+            enum: currencies,
+            default: 'USD'
+        }
+    },
+    hazardous: {
+        type: Boolean,
+        default: false
+    },
+    temperatureControlled: {
+        required: { type: Boolean, default: false },
+        minTemp: Number,
+        maxTemp: Number
+    },
     condition: {
         type: String,
         enum: ['Excellent', 'Good', 'Fair', 'Damaged'],
         default: 'Good'
     },
+    warehouseLocation: String,
     inspectionNotes: String
 });
 
-// Milestone Schema
+// ==================== MILESTONE SCHEMA ====================
 const milestoneSchema = new mongoose.Schema({
     status: {
         type: String,
@@ -80,9 +142,9 @@ const milestoneSchema = new mongoose.Schema({
     }
 });
 
-// Main Shipment Schema
+// ==================== MAIN SHIPMENT SCHEMA ====================
 const shipmentSchema = new mongoose.Schema({
-    // Identification
+    // ===== Identification =====
     shipmentNumber: {
         type: String,
         required: true,
@@ -99,29 +161,63 @@ const shipmentSchema = new mongoose.Schema({
         required: true
     },
     
-    // Customer Reference - Booking-এর customer-এর সাথে মিল রেখে
+    // ===== Relationships =====
     customerId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
     },
     
-    // Shipment Details (copied from booking)
-    shipmentDetails: {
-        shipmentType: {
+    // ===== Shipment Classification (Booking থেকে) =====
+    shipmentClassification: {
+        mainType: {
             type: String,
-            enum: ['air_freight', 'sea_freight', 'express_courier']
+            enum: shipmentTypes,
+            required: true
         },
-        origin: String,
-        destination: String,
-        shippingMode: {
+        subType: {
             type: String,
-            enum: ['DDP', 'DDU', 'FOB', 'CIF']
+            enum: shipmentSubTypes,
+            required: true
         }
     },
     
-    // Addresses - Booking-এর sender/receiver format-এ
-    sender: {                        // pickupAddress-এর পরিবর্তে
+    // ===== Shipment Details (Booking থেকে) =====
+    shipmentDetails: {
+        origin: {
+            type: String,
+            enum: origins,
+            required: true
+        },
+        destination: {
+            type: String,
+            enum: destinations,
+            required: true
+        },
+        shippingMode: {
+            type: String,
+            enum: shippingModes,
+            default: 'DDU'
+        },
+        totalPackages: {
+            type: Number,
+            default: 0
+        },
+        totalWeight: {
+            type: Number,
+            default: 0
+        },
+        totalVolume: {
+            type: Number,
+            default: 0
+        }
+    },
+    
+    // ===== Packages (Booking থেকে) =====
+    packages: [packageSchema],
+    
+    // ===== Sender Information (Booking থেকে) =====
+    sender: {
         name: String,
         companyName: String,
         email: String,
@@ -135,7 +231,9 @@ const shipmentSchema = new mongoose.Schema({
             postalCode: String
         }
     },
-    receiver: {                      // deliveryAddress-এর পরিবর্তে
+    
+    // ===== Receiver Information (Booking থেকে) =====
+    receiver: {
         name: String,
         companyName: String,
         email: String,
@@ -151,35 +249,44 @@ const shipmentSchema = new mongoose.Schema({
         isResidential: Boolean
     },
     
-    // Status
+    // ===== Courier Information (Booking থেকে) =====
+    courier: {
+        company: {
+            type: String,
+            enum: ['Cargo Logistics Group', 'DHL', 'FedEx', 'UPS', 'USPS', 'Other'],
+            default: 'Cargo Logistics Group'
+        },
+        serviceType: {
+            type: String,
+            enum: courierServiceTypes,
+            default: 'standard'
+        },
+        accountNumber: String,
+        trackingUrl: String,
+        estimatedPickupDate: Date,
+        actualPickupDate: Date,
+        estimatedDeliveryDate: Date,
+        actualDeliveryDate: Date,
+        deliveryConfirmation: String,
+        signedBy: String,
+        courierNotes: String
+    },
+    
+    // ===== Status =====
     status: {
         type: String,
         enum: shipmentStatuses,
         default: 'pending'
     },
-    
-    // Packages
-    packages: [packageSchema],
-    totalPackages: {
-        type: Number,
-        default: 0
-    },
-    totalWeight: {
-        type: Number,
-        default: 0
-    },
-    totalVolume: {
-        type: Number,
-        default: 0
+    currentMilestone: {
+        type: String,
+        enum: shipmentStatuses
     },
     
-    // Courier Information - Booking থেকে আসবে
-    courier: {
-        company: { type: String, default: 'Cargo Logistics Group' },
-        serviceType: String
-    },
+    // ===== Milestones =====
+    milestones: [milestoneSchema],
     
-    // Container Details
+    // ===== Container Information (Booking থেকে) =====
     containerInfo: {
         containerNumber: String,
         containerType: {
@@ -187,19 +294,11 @@ const shipmentSchema = new mongoose.Schema({
             enum: ['20FT', '40FT', '40FT HC']
         },
         sealNumber: String,
-        stuffedAt: Date,
-        stuffedBy: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        }
+        stuffedAt: Date
     },
     
-    // Transport Details
+    // ===== Transport Details (Booking থেকে) =====
     transport: {
-        mode: {
-            type: String,
-            enum: ['Sea Freight', 'Air Freight', 'Inland Trucking']
-        },
         carrierName: String,
         vesselName: String,
         flightNumber: String,
@@ -210,36 +309,45 @@ const shipmentSchema = new mongoose.Schema({
         actualDeparture: Date,
         actualArrival: Date,
         currentLocation: {
-            address: String,
-            lastUpdated: Date
+            location: String,
+            status: String,
+            timestamp: Date
         }
     },
     
-    // Milestones
-    milestones: [milestoneSchema],
-    currentMilestone: {
-        type: String,
-        enum: shipmentStatuses
-    },
-    
-    // Warehouse Info
+    // ===== Warehouse Information =====
     warehouseInfo: {
-        receivedDate: Date,
+        expectedAt: Date,
+        receivedAt: Date,
         receivedBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User'
         },
         location: String,
-        receiptId: String,
+        receiptNumber: String,
         notes: String
     },
     
+    // ===== Dates (Booking থেকে) =====
+    dates: {
+        estimatedDeparture: Date,
+        estimatedArrival: Date,
+        actualDeparture: Date,
+        actualArrival: Date,
+        delivered: Date
+    },
+    
+    // ===== Cancellation =====
+    cancelledAt: Date,
+    cancellationReason: String,
+    
+    // ===== Consolidation =====
     consolidationId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Consolidation'
     },
     
-    // Notes
+    // ===== Notes =====
     internalNotes: [{
         note: String,
         createdBy: {
@@ -258,14 +366,14 @@ const shipmentSchema = new mongoose.Schema({
         createdAt: Date
     }],
     
-    // Costs
+    // ===== Costs =====
     costs: [{
         type: {
             type: String,
             enum: ['freight', 'handling', 'warehouse', 'customs', 'insurance', 'other']
         },
         amount: Number,
-        currency: { type: String, default: 'USD' },
+        currency: { type: String, enum: currencies, default: 'USD' },
         description: String,
         vendor: String,
         incurredBy: {
@@ -275,28 +383,27 @@ const shipmentSchema = new mongoose.Schema({
         incurredAt: Date
     }],
     
-    // Cancellation
-    cancelledAt: Date,
-    cancellationReason: String,
-    
-    // Documents
+    // ===== Documents =====
     documents: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Document'
+        type: {
+            type: String,
+            enum: ['label', 'invoice', 'customs_form', 'packing_list', 'bill_of_lading', 'airway_bill', 'proof_of_delivery']
+        },
+        url: String,
+        uploadedAt: Date,
+        uploadedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }
     }],
     
-    // Assignment
+    // ===== Assignment =====
     assignedTo: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
     
-    // Dates
-    estimatedDepartureDate: Date,    // Booking থেকে আসবে
-    estimatedArrivalDate: Date,      // Booking থেকে আসবে
-    actualDeliveryDate: Date,
-    
-    // Audit
+    // ===== Audit =====
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -310,24 +417,31 @@ const shipmentSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Pre-save middleware
+// ==================== PRE-SAVE MIDDLEWARE ====================
 shipmentSchema.pre('save', function(next) {
+    // Calculate totals from packages
     if (this.packages && this.packages.length > 0) {
-        this.totalPackages = this.packages.reduce((sum, pkg) => sum + pkg.quantity, 0);
-        this.totalWeight = this.packages.reduce((sum, pkg) => sum + (pkg.weight * pkg.quantity), 0);
-        this.totalVolume = this.packages.reduce((sum, pkg) => sum + (pkg.volume * pkg.quantity), 0);
+        this.shipmentDetails.totalPackages = this.packages.reduce((sum, pkg) => sum + pkg.quantity, 0);
+        this.shipmentDetails.totalWeight = this.packages.reduce((sum, pkg) => sum + (pkg.weight * pkg.quantity), 0);
+        this.shipmentDetails.totalVolume = this.packages.reduce((sum, pkg) => sum + (pkg.volume * pkg.quantity), 0);
     }
     
+    // Set current milestone from latest milestone
     if (this.milestones && this.milestones.length > 0) {
         const latest = this.milestones[this.milestones.length - 1];
         this.currentMilestone = latest.status;
+    }
+    
+    // Update transport current location if exists
+    if (this.transport?.currentLocation) {
+        this.transport.currentLocation.timestamp = new Date();
     }
     
     this.updatedAt = Date.now();
     next();
 });
 
-// Methods
+// ==================== METHODS ====================
 shipmentSchema.methods.addMilestone = function(status, location, description, userId) {
     this.milestones.push({
         status,
@@ -338,17 +452,26 @@ shipmentSchema.methods.addMilestone = function(status, location, description, us
     });
     this.status = status;
     this.currentMilestone = status;
+    
+    // Update transport current location if location provided
+    if (location) {
+        if (!this.transport) this.transport = {};
+        this.transport.currentLocation = {
+            location,
+            status,
+            timestamp: new Date()
+        };
+    }
 };
 
 shipmentSchema.methods.getProgress = function() {
     const order = [
         'pending',
-        'received_at_warehouse',
-        'consolidation_in_progress',
-        'loaded_in_container',
-        'in_transit',
-        'arrived_at_destination',
-        'customs_clearance',
+        'picked_up_from_warehouse',
+        'departed_port_of_origin',
+        'in_transit_sea_freight',
+        'arrived_at_destination_port',
+        'customs_cleared',
         'out_for_delivery',
         'delivered'
     ];
@@ -358,11 +481,23 @@ shipmentSchema.methods.getProgress = function() {
     return Math.round((currentIndex / (order.length - 1)) * 100);
 };
 
-// Indexes
+shipmentSchema.methods.updateDeliveryStatus = function(status, location, userId) {
+    this.status = status;
+    this.addMilestone(status, location, `Shipment status updated to ${status}`, userId);
+    
+    if (status === 'delivered') {
+        this.dates.delivered = new Date();
+        this.courier.actualDeliveryDate = new Date();
+    }
+};
+
+// ==================== INDEXES ====================
 shipmentSchema.index({ shipmentNumber: 1 });
 shipmentSchema.index({ trackingNumber: 1 });
 shipmentSchema.index({ bookingId: 1 });
 shipmentSchema.index({ customerId: 1, status: 1 });
-shipmentSchema.index({ 'warehouseInfo.location': 1, status: 1 });
+shipmentSchema.index({ 'shipmentDetails.origin': 1, 'shipmentDetails.destination': 1 });
+shipmentSchema.index({ 'containerInfo.containerNumber': 1 });
+shipmentSchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Shipment', shipmentSchema);

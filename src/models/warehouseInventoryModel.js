@@ -1,9 +1,14 @@
-// models/warehouseInventoryModel.js
+// models/warehouseInventoryModel.js - ক্লিন ভার্সন
 
 const mongoose = require('mongoose');
 
-const inventoryItemSchema = new mongoose.Schema({
-    // Reference
+// Common package types enum (এক জায়গায় define করুন)
+const PACKAGE_TYPES = [
+    'pallet', 'carton', 'crate', 'wooden_box', 'container',
+    'envelope', 'loose_cargo', 'loose_tires', '20ft_container', '40ft_container'
+];
+
+const warehouseInventorySchema = new mongoose.Schema({
     shipmentId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Shipment',
@@ -11,89 +16,86 @@ const inventoryItemSchema = new mongoose.Schema({
     },
     bookingId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Booking',
-        required: true
+        ref: 'Booking'
     },
     warehouseId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Warehouse',
         required: true
     },
-
-    // Package Details
+    
     packageType: {
         type: String,
-        enum: ['Carton', 'Pallet', 'Crate', 'Box', 'Drum', 'Bag'],
+        enum: [...PACKAGE_TYPES, 'Box', 'Other'],  // ✅ Clean enum
+        default: 'carton'
+    },
+    
+    packageId: {
+        type: String,
         required: true
     },
-    packageId: String, // Barcode or QR code
-    quantity: Number,
+    
+    quantity: {
+        type: Number,
+        default: 1,
+        min: 1
+    },
+    
     description: String,
     
-    // Physical Details
-    weight: Number, // kg
-    volume: Number, // cbm
+    weight: {
+        type: Number,
+        default: 0
+    },
+    
+    volume: {
+        type: Number,
+        default: 0
+    },
+    
     dimensions: {
-        length: Number,
-        width: Number,
-        height: Number,
+        length: { type: Number, default: 0 },
+        width: { type: Number, default: 0 },
+        height: { type: Number, default: 0 },
         unit: { type: String, default: 'cm' }
     },
-
-    // Storage Location
+    
     location: {
-        zone: String,
-        aisle: String,
-        rack: String,
-        bin: String,
-        lastMoved: Date
+        zone: { type: String, required: true },
+        aisle: { type: String, required: true },
+        rack: { type: String, required: true },
+        bin: { type: String, required: true }
     },
-
-    // Status
+    
+    condition: {
+        type: String,
+        enum: ['Good', 'Damaged', 'Partial', 'Excellent', 'Fair'],
+        default: 'Good'
+    },
+    
     status: {
         type: String,
-        enum: [
-            'received',
-            'inspected',
-            'stored',
-            'consolidated',
-            'loaded',
-            'shipped',
-            'damaged',
-            'quarantine'
-        ],
+        enum: ['received', 'inspected', 'stored', 'damaged', 'consolidated', 'loaded', 'shipped'],
         default: 'received'
     },
-
-    // Handling Instructions
-    handlingInstructions: [String],
-    hazardous: {
-        type: Boolean,
-        default: false
+    
+    receivedAt: {
+        type: Date,
+        default: Date.now
     },
-    temperatureControlled: {
-        required: Boolean,
-        minTemp: Number,
-        maxTemp: Number
-    },
-
-    // Consolidation Information
+    inspectedAt: Date,
+    storedAt: Date,
+    
     consolidationId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Consolidation'
     },
-
-    // Timeline
-    receivedAt: Date,
-    storedAt: Date,
-    loadedAt: Date,
-    shippedAt: Date,
-
-    // Audit
+    
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
+    
     updatedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -102,9 +104,4 @@ const inventoryItemSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Index for quick search
-inventoryItemSchema.index({ location: 1, status: 1 });
-inventoryItemSchema.index({ shipmentId: 1 });
-inventoryItemSchema.index({ consolidationId: 1 });
-
-module.exports = mongoose.model('WarehouseInventory', inventoryItemSchema);
+module.exports = mongoose.model('WarehouseInventory', warehouseInventorySchema);

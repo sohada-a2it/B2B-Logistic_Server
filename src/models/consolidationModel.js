@@ -1,5 +1,3 @@
-// models/consolidationModel.js
-
 const mongoose = require('mongoose');
 
 const consolidationSchema = new mongoose.Schema({
@@ -8,71 +6,65 @@ const consolidationSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
-
     // Shipments in this consolidation
     shipments: [{
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Shipment'
+        ref: 'Shipment',
+        required: true
     }],
-
-    // Warehouse
-    warehouseId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Warehouse',
+    // Container Information
+    containerNumber: {
+        type: String,
         required: true
     },
-
-    // Consolidation Details
     containerType: {
         type: String,
-        enum: [
-            '20ft Container',
-            '40ft Container',
-            '40ft HC Container',
-            'Air Freight Pallet',
-            'LCL',
-            'Loose'
-        ],
+        enum: ['20ft', '40ft', '40ft HC', '45ft', 'LCL'],
+        default: '20ft'
+    },
+    sealNumber: String,
+    
+    // Route Information
+    originWarehouse: {
+        type: String,
+        default: 'Main Warehouse'
+    },
+    destinationPort: {
+        type: String,
         required: true
     },
-    containerNumber: String,
-    sealNumber: String,
-
-    // Consolidation Stats
-    totalShipments: Number,
-    totalPackages: Number,
-    totalWeight: Number, // kg
-    totalVolume: Number, // cbm
+    destinationCountry: String,
     
-    // Origin/Destination
-    originWarehouse: String,
-    destinationPort: String,
-
     // Dates
-    consolidationStarted: Date,
+    consolidationStarted: {
+        type: Date,
+        default: Date.now
+    },
     consolidationCompleted: Date,
     estimatedDeparture: Date,
     actualDeparture: Date,
-
-    // Status
-    status: {
-        type: String,
-        enum: [
-            'pending',
-            'in_progress',
-            'completed',
-            'loaded',
-            'departed'
-        ],
-        default: 'pending'
+    estimatedArrival: Date,
+    
+    // Shipment Details
+    totalShipments: {
+        type: Number,
+        default: 0
     },
-
+    totalPackages: {
+        type: Number,
+        default: 0
+    },
+    totalWeight: {
+        type: Number,
+        default: 0
+    },
+    totalVolume: {
+        type: Number,
+        default: 0
+    },
+    
     // Items in consolidation
     items: [{
-        inventoryId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'WarehouseInventory'
-        },
         shipmentId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Shipment'
@@ -83,20 +75,29 @@ const consolidationSchema = new mongoose.Schema({
         weight: Number,
         volume: Number
     }],
-
+    
+    // Status
+    status: {
+        type: String,
+        enum: ['draft', 'in_progress', 'completed', 'loaded', 'departed'],
+        default: 'draft'
+    },
+    
     // Documents
     documents: [{
-        type: String, // packing list, container manifest
+        type: {
+            type: String,
+            enum: ['packing_list', 'container_manifest', 'bill_of_lading']
+        },
         url: String,
+        uploadedAt: Date,
         uploadedBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User'
-        },
-        uploadedAt: Date
+        }
     }],
-
-    notes: String,
-
+    
+    // Tracking
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -110,38 +111,15 @@ const consolidationSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Generate consolidation number
+// Generate consolidation number before saving
 consolidationSchema.pre('save', async function(next) {
     if (this.isNew && !this.consolidationNumber) {
-        const date = new Date();
-        const year = date.getFullYear().toString().slice(-2);
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        
-        const count = await this.constructor.countDocuments({
-            consolidationNumber: new RegExp(`^CON-${year}${month}`)
-        });
-        
-        this.consolidationNumber = `CON-${year}${month}-${(count + 1).toString().padStart(4, '0')}`;
+        const count = await this.constructor.countDocuments();
+        const year = new Date().getFullYear();
+        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        this.consolidationNumber = `CN-${year}${month}-${String(count + 1).padStart(4, '0')}`;
     }
     next();
 });
-// Add indexes for better performance
-consolidationSchema.index({ status: 1 });
-consolidationSchema.index({ warehouseId: 1, status: 1 });
-consolidationSchema.index({ estimatedDeparture: 1 });
 
-// Add virtual for duration
-consolidationSchema.virtual('consolidationDuration').get(function() {
-    if (this.consolidationStarted && this.consolidationCompleted) {
-        return (this.consolidationCompleted - this.consolidationStarted) / (1000 * 60 * 60); // hours
-    }
-    return null;
-});
-
-// Add method to check if ready to depart
-consolidationSchema.methods.isReadyToDepart = function() {
-    return this.status === 'completed' && 
-           this.containerNumber && 
-           this.sealNumber;
-};
 module.exports = mongoose.model('Consolidation', consolidationSchema);
