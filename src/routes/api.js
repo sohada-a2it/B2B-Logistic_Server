@@ -161,60 +161,70 @@ router.put(
 
 // ========== CONSOLIDATION ==========
 
-// Get all consolidations
-router.get(
-    '/consolidations',
-    protect,
-    adminOnly,
-    warehouseController.getConsolidations
-);
+// // Get all consolidations
+// router.get(
+//     '/consolidations',
+//     protect,
+//     adminOnly,
+//     warehouseController.getConsolidations
+// );
 
-// Get consolidation by ID
-router.get(
-    '/consolidations/:id',
-    protect,
-    adminOnly,
-    warehouseController.getConsolidationById
-);
+// // Get consolidation by ID
+// router.get(
+//     '/consolidations/:id',
+//     protect,
+//     adminOnly,
+//     warehouseController.getConsolidationById
+// );
 
-// Start consolidation
-router.post(
-    '/consolidations/start',
-    protect,
-    adminOnly,
-    warehouseController.startConsolidation
-);
+// // Start consolidation
+// router.post(
+//     '/consolidations/start',
+//     protect,
+//     adminOnly,
+//     warehouseController.startConsolidation
+// );
 
-// Complete consolidation
-router.put(
-    '/consolidations/:id/complete',
-    protect,
-    adminOnly,
-    warehouseController.completeConsolidation
-);
+// // Complete consolidation
+// router.put(
+//     '/consolidations/:id/complete',
+//     protect,
+//     adminOnly,
+//     warehouseController.completeConsolidation
+// );
 
-// Load and depart consolidation
-router.put(
-    '/consolidations/:id/depart',
-    protect,
-    adminOnly,
-    warehouseController.loadAndDepart
-);
+// // Load and depart consolidation
+// router.put(
+//     '/consolidations/:id/depart',
+//     protect,
+//     adminOnly,
+//     warehouseController.loadAndDepart
+// );
 
-// Add documents to consolidation
-router.post(
-    '/consolidations/:id/documents',
-    protect,
-    adminOnly,
-    warehouseController.addConsolidationDocuments
-);
-// ========== Queue Routes ==========
-router.get('/queue', protect,consolidationController.getConsolidationQueue);
+// // Add documents to consolidation
+// router.post(
+//     '/consolidations/:id/documents',
+//     protect,
+//     adminOnly,
+//     warehouseController.addConsolidationDocuments
+// );
+// ========== Queue Routes ========== 
+router.get('/queue', protect, consolidationController.getConsolidationQueue);
+router.post('/queue/add', protect, consolidationController.addToQueue);
+router.post('/queue/add-multiple', protect, consolidationController.addMultipleToQueue);
+router.get('/queue/summary', protect, consolidationController.getQueueSummary);
 router.delete('/queue/:id', protect, consolidationController.removeFromQueue);
+router.post('/queue/bulk-remove', protect, consolidationController.bulkRemoveFromQueue);
 
 // ========== Consolidation Routes ==========
-router.post('/consolidations/create', protect, consolidationController.createConsolidation);
-router.get('/getconsolidations', protect, consolidationController.getConsolidations);
-router.get('/consolidationsById/:id', protect, consolidationController.getConsolidationById);
-router.put('/consolidationsStatus/:id', protect, consolidationController.updateConsolidationStatus);
+router.post('/consolidation/create', protect, adminOnly, consolidationController.createConsolidation);
+router.get('/all/consolidations', protect, consolidationController.getConsolidations);
+router.get('/stats/consolidations', protect, consolidationController.getConsolidationStats);
+router.get('/container-types/consolidations', protect, consolidationController.getAvailableContainerTypes);
+router.get('/consolidations/:id', protect, consolidationController.getConsolidationById);
+router.put('/consolidations/:id', protect, adminOnly, consolidationController.updateConsolidation);
+router.put('/consolidations/:id/status', protect, adminOnly, consolidationController.updateConsolidationStatus);
+router.post('/consolidations/:id/add-shipments', protect, adminOnly, consolidationController.addShipmentsToConsolidation);
+router.delete('/consolidations/:id/shipment/:shipmentId', protect, adminOnly, consolidationController.removeShipmentFromConsolidation);
+router.delete('/consolidations/:id', protect, adminOnly, consolidationController.deleteConsolidation);
 module.exports = router;

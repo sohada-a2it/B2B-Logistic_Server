@@ -58,25 +58,25 @@ const calculateCustomerTotalSpent = async (customerId) => {
 };
 
 // Calculate progress percentage
-const calculateProgress = (status) => {
-    const statusOrder = [
-        'booking_requested',
-        'price_quoted',
-        'booking_confirmed',
-        'pending',
-        'picked_up_from_warehouse',
-        'departed_port_of_origin',
-        'in_transit_sea_freight',
-        'arrived_at_destination_port',
-        'customs_cleared',
-        'out_for_delivery',
-        'delivered'
-    ];
+// const calculateProgress = (status) => {
+//     const statusOrder = [
+//         'booking_requested',
+//         'price_quoted',
+//         'booking_confirmed',
+//         'pending',
+//         'picked_up_from_warehouse',
+//         'departed_port_of_origin',
+//         'in_transit_sea_freight',
+//         'arrived_at_destination_port',
+//         'customs_cleared',
+//         'out_for_delivery',
+//         'delivered'
+//     ];
 
-    const index = statusOrder.indexOf(status);
-    if (index === -1) return 0;
-    return Math.round((index / (statusOrder.length - 1)) * 100);
-};
+//     const index = statusOrder.indexOf(status);
+//     if (index === -1) return 0;
+//     return Math.round((index / (statusOrder.length - 1)) * 100);
+// };
 
 // ========== 1. CREATE BOOKING (Customer) ==========
 // controllers/bookingController.js - Fixed version
@@ -1467,81 +1467,250 @@ exports.getMyBookingsSummary = async (req, res) => {
 };
 
 // ========== 14. TRACK BY NUMBER (Public) ==========
+// controllers/trackingController.js
+
 exports.trackByNumber = async (req, res) => {
     try {
         const { trackingNumber } = req.params;
 
-        console.log('Searching for tracking number:', trackingNumber);
+        console.log('🔍 Searching for tracking number:', trackingNumber);
 
-        let booking = await Booking.findOne({ trackingNumber })
+        // ===== 1. প্রথমে Shipment-এ খুঁজুন =====
+        let shipment = await Shipment.findOne({ trackingNumber })
             .populate({
-                path: 'shipmentId',
-                select: 'status milestones currentLocation transport trackingNumber'
+                path: 'bookingId',
+                select: 'bookingNumber sender receiver payment shipmentClassification courier'
             })
-            .select('bookingNumber status shipmentDetails timeline courier currentLocation sender receiver');
+            .populate('customerId', 'companyName firstName lastName email phone')
+            .populate('consolidationId')
+            .lean();
 
-        if (!booking) {
-            console.log('Not found in Booking, trying Shipment...');
+        // ===== 2. Shipment না পেলে Booking-এ খুঁজুন =====
+        if (!shipment) {
+            console.log('📦 Not found in Shipment, trying Booking...');
             
-            const shipment = await Shipment.findOne({ trackingNumber })
-                .populate('bookingId', 'bookingNumber sender receiver')
-                .select('bookingId status milestones transport trackingNumber');
+            const booking = await Booking.findOne({ trackingNumber })
+                .populate('customer', 'companyName firstName lastName email phone')
+                .populate('shipmentId')
+                .lean();
 
-            if (!shipment) {
-                return res.status(404).json({ 
-                    success: false, 
-                    message: 'Tracking number not found' 
-                });
+            if (booking) {
+                // Booking থেকে shipment বানান
+                shipment = {
+                    ...booking,
+                    shipmentNumber: booking.bookingNumber,
+                    customerId: booking.customer,
+                    packages: booking.shipmentDetails?.packageDetails || [],
+                    milestones: booking.timeline || []
+                };
             }
-
-            booking = await Booking.findById(shipment.bookingId)
-                .select('bookingNumber sender receiver shipmentDetails');
         }
 
-        if (!booking) {
+        if (!shipment) {
             return res.status(404).json({ 
                 success: false, 
-                message: 'Tracking information not found' 
+                message: 'Tracking number not found' 
             });
         }
 
-        const shipment = await Shipment.findOne({ trackingNumber })
-            .select('status milestones currentLocation transport actualDeliveryDate');
+        // ===== 3. প্যাকেজ ডিটেইলস ক্যালকুলেট =====
+        let totalPackages = 0;
+        let totalWeight = 0;
+        let totalVolume = 0;
+        let packageDetails = [];
 
-        const timeline = (shipment?.milestones || booking.timeline || []).map(entry => ({
-            status: entry.status,
-            location: entry.location || 'Unknown',
-            description: entry.description,
-            date: entry.timestamp,
-            formattedDate: new Date(entry.timestamp).toLocaleString('en-US', {
-                dateStyle: 'medium',
-                timeStyle: 'short'
-            })
-        }));
+        // Shipment থেকে packages নিন
+        if (shipment.packages && shipment.packages.length > 0) {
+            shipment.packages.forEach((pkg, index) => {
+                const quantity = pkg.quantity || 1;
+                totalPackages += quantity;
+                totalWeight += (pkg.weight || 0) * quantity;
+                totalVolume += (pkg.volume || 0) * quantity;
+                
+                packageDetails.push({
+                    id: index + 1,
+                    description: pkg.description || 'N/A',
+                    type: pkg.packagingType || 'Carton',
+                    quantity: quantity,
+                    weight: pkg.weight || 0,
+                    volume: pkg.volume || 0,
+                    dimensions: pkg.dimensions ? 
+                        `${pkg.dimensions.length} × ${pkg.dimensions.width} × ${pkg.dimensions.height} ${pkg.dimensions.unit || 'cm'}` : 
+                        'N/A',
+                    productCategory: pkg.productCategory || 'General',
+                    hazardous: pkg.hazardous ? 'Yes' : 'No',
+                    temperatureControlled: pkg.temperatureControlled?.required ? 'Yes' : 'No',
+                    condition: pkg.condition || 'Good'
+                });
+            });
+        } 
+        // Booking থেকে packageDetails নিন
+        else if (shipment.shipmentDetails?.packageDetails) {
+            shipment.shipmentDetails.packageDetails.forEach((pkg, index) => {
+                const quantity = pkg.quantity || 1;
+                totalPackages += quantity;
+                totalWeight += (pkg.weight || 0) * quantity;
+                totalVolume += (pkg.volume || 0) * quantity;
+                
+                packageDetails.push({
+                    id: index + 1,
+                    description: pkg.description || 'N/A',
+                    type: pkg.packagingType || 'Carton',
+                    quantity: quantity,
+                    weight: pkg.weight || 0,
+                    volume: pkg.volume || 0,
+                    dimensions: pkg.dimensions ? 
+                        `${pkg.dimensions.length} × ${pkg.dimensions.width} × ${pkg.dimensions.height} ${pkg.dimensions.unit || 'cm'}` : 
+                        'N/A',
+                    productCategory: pkg.productCategory || 'General',
+                    hazardous: pkg.hazardous ? 'Yes' : 'No',
+                    temperatureControlled: pkg.temperatureControlled?.required ? 'Yes' : 'No'
+                });
+            });
+        }
 
-        const progress = calculateProgress(shipment?.status || booking.status);
+        // ===== 4. টাইমলাইন তৈরি করুন =====
+        const timeline = [];
+        
+        // Shipment milestones থেকে
+        if (shipment.milestones && shipment.milestones.length > 0) {
+            shipment.milestones.forEach(entry => {
+                timeline.push({
+                    status: entry.status,
+                    location: entry.location || 'Unknown',
+                    description: entry.description || getStatusDescription(entry.status),
+                    date: entry.timestamp,
+                    formattedDate: new Date(entry.timestamp).toLocaleString('en-US', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short'
+                    })
+                });
+            });
+        }
+        
+        // Booking timeline থেকে
+        if (shipment.timeline && shipment.timeline.length > 0) {
+            shipment.timeline.forEach(entry => {
+                timeline.push({
+                    status: entry.status,
+                    location: entry.location || 'Unknown',
+                    description: entry.description || getStatusDescription(entry.status),
+                    date: entry.timestamp,
+                    formattedDate: new Date(entry.timestamp).toLocaleString('en-US', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short'
+                    })
+                });
+            });
+        }
 
+        // টাইমলাইন সর্ট করুন (নতুন প্রথমে)
+        timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        // ===== 5. কনসলিডেশন তথ্য =====
+        let consolidationInfo = null;
+        if (shipment.consolidationId) {
+            const consolidation = shipment.consolidationId;
+            consolidationInfo = {
+                number: consolidation.consolidationNumber,
+                containerNumber: consolidation.containerNumber,
+                containerType: consolidation.containerType,
+                sealNumber: consolidation.sealNumber,
+                originWarehouse: consolidation.originWarehouse,
+                destinationPort: consolidation.destinationPort,
+                estimatedDeparture: consolidation.estimatedDeparture,
+                status: consolidation.status
+            };
+        }
+
+        // ===== 6. প্রগ্রেস ক্যালকুলেট =====
+        const progress = calculateProgress(shipment.status);
+
+        // ===== 7. ফাইনাল ট্র্যাকিং ডেটা =====
         const trackingInfo = {
-            trackingNumber: trackingNumber,
-            bookingNumber: booking.bookingNumber,
-            status: shipment?.status || booking.status,
-            sender: {
-                name: booking.sender?.name,
-                address: booking.sender?.address
-            },
-            receiver: {
-                name: booking.receiver?.name,
-                address: booking.receiver?.address
-            },
-            origin: booking.shipmentDetails?.origin || 'Unknown',
-            destination: booking.shipmentDetails?.destination || 'Unknown',
-            currentLocation: shipment?.currentLocation?.location || booking.currentLocation?.location || 'Unknown',
-            estimatedDelivery: shipment?.transport?.estimatedArrival || booking.courier?.estimatedDeliveryDate || null,
-            actualDelivery: shipment?.actualDeliveryDate || null,
+            // বেসিক তথ্য
+            trackingNumber: shipment.trackingNumber,
+            shipmentNumber: shipment.shipmentNumber || shipment.bookingNumber,
+            bookingNumber: shipment.bookingId?.bookingNumber || shipment.bookingNumber,
+            
+            // স্ট্যাটাস
+            status: shipment.status,
+            statusDisplay: formatStatus(shipment.status),
             progress: progress,
-            timeline: timeline.sort((a, b) => b.date - a.date),
+            
+            // রুট
+            origin: shipment.shipmentDetails?.origin || shipment.origin || 'Unknown',
+            destination: shipment.shipmentDetails?.destination || shipment.destination || 'Unknown',
+            currentLocation: shipment.transport?.currentLocation?.location || 
+                            shipment.currentLocation?.location || 
+                            timeline[0]?.location || 
+                            'Unknown',
+            
+            // তারিখ
             lastUpdate: timeline.length > 0 ? timeline[0].formattedDate : 'No updates yet',
-            courier: booking.courier
+            estimatedDeparture: shipment.dates?.estimatedDeparture || 
+                               shipment.transport?.estimatedDeparture || 
+                               shipment.shipmentDetails?.estimatedDeparture,
+            estimatedArrival: shipment.dates?.estimatedArrival || 
+                             shipment.transport?.estimatedArrival || 
+                             shipment.courier?.estimatedDeliveryDate,
+            actualDelivery: shipment.dates?.delivered || 
+                           shipment.courier?.actualDeliveryDate,
+            
+            // ===== শিপমেন্ট ডিটেইলস (এখন দেখাবে) =====
+            shipmentDetails: {
+                totalPackages: totalPackages,
+                totalWeight: totalWeight,
+                totalVolume: totalVolume,
+                shippingMode: shipment.shipmentDetails?.shippingMode || 
+                             shipment.shippingMode || 
+                             'DDU',
+                serviceType: shipment.courier?.serviceType || 
+                            shipment.serviceType || 
+                            'standard'
+            },
+            
+            // ===== প্যাকেজ ডিটেইলস (এখন দেখাবে) =====
+            packages: packageDetails,
+            
+            // ===== কন্টেইনার তথ্য =====
+            container: shipment.containerInfo ? {
+                number: shipment.containerInfo.containerNumber,
+                type: shipment.containerInfo.containerType,
+                seal: shipment.containerInfo.sealNumber
+            } : null,
+            
+            // ===== কনসলিডেশন তথ্য =====
+            consolidation: consolidationInfo,
+            
+            // ===== ট্রান্সপোর্ট তথ্য =====
+            transport: shipment.transport ? {
+                carrier: shipment.transport.carrierName,
+                vessel: shipment.transport.vesselName,
+                flight: shipment.transport.flightNumber,
+                voyage: shipment.transport.voyageNumber
+            } : null,
+            
+            // ===== সেন্ডার/রিসিভার =====
+            sender: shipment.sender || shipment.bookingId?.sender || null,
+            receiver: shipment.receiver || shipment.bookingId?.receiver || null,
+            
+            // ===== কাস্টমার =====
+            customer: shipment.customerId ? {
+                name: shipment.customerId.companyName || 
+                      `${shipment.customerId.firstName || ''} ${shipment.customerId.lastName || ''}`.trim(),
+                email: shipment.customerId.email,
+                phone: shipment.customerId.phone
+            } : null,
+            
+            // ===== টাইমলাইন =====
+            timeline: timeline,
+            
+            // ===== ডকুমেন্টস =====
+            documents: shipment.documents || [],
+            
+            // ===== কস্ট তথ্য =====
+            costs: shipment.costs || []
         };
 
         res.status(200).json({
@@ -1550,13 +1719,60 @@ exports.trackByNumber = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Track by number error:', error);
+        console.error('❌ Track by number error:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
         });
     }
 };
+
+// ==================== হেল্পার ফাংশন ====================
+
+function calculateProgress(status) {
+    const order = [
+        'pending',
+        'picked_up_from_warehouse',
+        'received_at_warehouse',
+        'consolidated',
+        'departed_port_of_origin',
+        'in_transit_sea_freight',
+        'arrived_at_destination_port',
+        'customs_cleared',
+        'out_for_delivery',
+        'delivered'
+    ];
+    
+    const index = order.indexOf(status);
+    if (index === -1) return 0;
+    return Math.round((index / (order.length - 1)) * 100);
+}
+
+function formatStatus(status) {
+    if (!status) return 'Unknown';
+    return status.split('_').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+}
+
+function getStatusDescription(status) {
+    const descriptions = {
+        'pending': 'Shipment created and pending processing',
+        'picked_up_from_warehouse': 'Package picked up from warehouse',
+        'received_at_warehouse': 'Package received at warehouse',
+        'consolidated': 'Shipment consolidated with other cargo',
+        'departed_port_of_origin': 'Vessel/flight departed from origin port',
+        'in_transit_sea_freight': 'Shipment in transit',
+        'arrived_at_destination_port': 'Arrived at destination port',
+        'customs_cleared': 'Customs clearance completed',
+        'out_for_delivery': 'Out for delivery',
+        'delivered': 'Successfully delivered',
+        'on_hold': 'Shipment on hold',
+        'cancelled': 'Shipment cancelled',
+        'returned': 'Shipment returned to sender'
+    };
+    return descriptions[status] || `Status updated to ${formatStatus(status)}`;
+}
 
 // ========== 15. UPDATE DELIVERY STATUS ==========
 exports.updateDeliveryStatus = async (req, res) => {

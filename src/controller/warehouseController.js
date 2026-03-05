@@ -939,8 +939,7 @@ exports.createWarehouse = async (req, res) => {
     }
 };
 
-// ========== 17. INSPECT RECEIVED SHIPMENT ==========
-// ========== INSPECT SHIPMENT FUNCTION ==========
+// ========== 17. INSPECT RECEIVED SHIPMENT ========== 
 exports.inspectShipment = async (req, res) => {
     try {
         const { receiptId } = req.params;
@@ -976,16 +975,20 @@ exports.inspectShipment = async (req, res) => {
         // 🟢 Add to Consolidation Queue if Good
         // ============================================
         
+        let addedToQueue = false;
+        let groupKey = null;
+        
         if (inspectionData.condition === 'Good') {
             const shipment = receipt.shipmentId;
             
-            // Get origin and destination
+            // Get ALL required fields
+            const mainType = shipment.shipmentClassification?.mainType || 'unknown';
+            const subType = shipment.shipmentClassification?.subType || 'unknown';
             const origin = shipment.shipmentDetails?.origin || 'Unknown';
             const destination = shipment.shipmentDetails?.destination || 'Unknown';
             
-            // Create group key for destination-wise grouping
-            // Format: "ORIGIN→DESTINATION" (e.g., "China→USA")
-            const groupKey = `${origin}→${destination}`;
+            // Create COMPLETE group key with ALL FOUR parts
+            groupKey = `${mainType}_${subType}_${origin}_${destination}`;
             
             // Check if already in queue
             const existingInQueue = await ConsolidationQueue.findOne({
@@ -1006,17 +1009,22 @@ exports.inspectShipment = async (req, res) => {
                     totalVolume += (pkg.volume || 0) * qty;
                 });
                 
-                // Add to queue with group key
+                // Add to queue with ALL fields
                 await ConsolidationQueue.create({
                     shipmentId: shipment._id,
                     receiptId: receipt._id,
                     warehouseId: receipt.warehouseId,
                     customerId: receipt.customerId?._id,
                     trackingNumber: shipment.trackingNumber,
+                    
+                    // CRITICAL FIELDS FOR GROUPING
+                    mainType: mainType,
+                    subType: subType,
                     origin: origin,
                     destination: destination,
                     destinationCountry: shipment.shipmentDetails?.destinationCountry,
-                    groupKey: groupKey,  // ← Important for grouping
+                    groupKey: groupKey,  // Complete groupKey
+                    
                     packages: receipt.packages.map((pkg, idx) => ({
                         description: pkg.description,
                         packagingType: pkg.packagingType,
@@ -1025,6 +1033,7 @@ exports.inspectShipment = async (req, res) => {
                         volume: pkg.volume,
                         condition: 'Good'
                     })),
+                    
                     totalWeight,
                     totalVolume,
                     totalPackages,
@@ -1034,29 +1043,39 @@ exports.inspectShipment = async (req, res) => {
                     priority: 0
                 });
                 
-                console.log(`✅ Shipment ${shipment.trackingNumber} added to queue`);
-                console.log(`   Group: ${groupKey}`);
+                addedToQueue = true;
+                
+                console.log('✅ Shipment added to queue with complete grouping:');
+                console.log(`   📦 Tracking: ${shipment.trackingNumber}`);
+                console.log(`   🔑 Group Key: ${groupKey}`);
+                console.log(`   📊 MainType: ${mainType}, SubType: ${subType}`);
+                console.log(`   📍 Route: ${origin} → ${destination}`);
                 
                 // Update shipment status
                 shipment.warehouseStatus = 'ready_for_consolidation';
                 await shipment.save();
+            } else {
+                console.log('⚠️ Shipment already in queue:', shipment.trackingNumber);
             }
         }
 
+        // Response এ shipment variable use না করে সরাসরি receipt থেকে data নিন
         res.status(200).json({
             success: true,
             message: 'Inspection completed successfully',
             data: {
                 receipt,
                 condition: inspectionData.condition,
-                addedToQueue: inspectionData.condition === 'Good',
-                groupKey: inspectionData.condition === 'Good' ? 
-                    `${receipt.shipmentId?.shipmentDetails?.origin}→${receipt.shipmentId?.shipmentDetails?.destination}` : null
+                addedToQueue: addedToQueue,
+                groupKey: groupKey,
+                trackingNumber: receipt.shipmentId?.trackingNumber,
+                origin: receipt.shipmentId?.shipmentDetails?.origin,
+                destination: receipt.shipmentId?.shipmentDetails?.destination
             }
         });
 
     } catch (error) {
-        console.error('Inspect shipment error:', error);
+        console.error('❌ Inspect shipment error:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 

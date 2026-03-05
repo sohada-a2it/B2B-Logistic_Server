@@ -6,81 +6,93 @@ const consolidationQueueSchema = new mongoose.Schema({
         ref: 'Shipment',
         required: true
     },
-    receiptId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'WarehouseReceipt'
-    },
-    warehouseId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Warehouse',
+    trackingNumber: {
+        type: String,
         required: true
     },
     customerId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-    },
-    
-    // Shipment Details
-    trackingNumber: String,
-    origin: String,           // China/Thailand
-    destination: String,       // USA/UK/Canada
-    destinationCountry: String,
-    
-    // Package Summary
-    packages: [{
-        description: String,
-        packagingType: String,
-        quantity: Number,
-        weight: Number,
-        volume: Number,
-        condition: String
-    }],
-    
-    // Totals
-    totalWeight: Number,
-    totalVolume: Number,
-    totalPackages: Number,
-    
-    // Grouping Key (for destination-wise grouping)
-    groupKey: {
-        type: String,
+        ref: 'User',
         required: true
     },
+    
+    // ===== গ্রুপিং কী (Shipment Classification + Origin + Destination) =====
+    groupKey: {
+        type: String,
+        required: true,
+        index: true
+    },
+    
+    // গ্রুপিং কম্পোনেন্ট (individual fields for easier querying)
+    mainType: {
+        type: String,
+        enum: ['sea_freight', 'air_freight', 'inland_trucking', 'multimodal'],
+        required: true
+    },
+    subType: {
+        type: String,
+        enum: [
+            'sea_freight_fcl', 'sea_freight_lcl', 'air_freight',
+            'rail_freight', 'express_delivery', 'inland_transport', 'door_to_door'
+        ],
+        required: true
+    },
+    origin: {
+        type: String,
+        enum: ['China Warehouse', 'Thailand Warehouse'],
+        required: true
+    },
+    destination: {
+        type: String,
+        enum: ['USA', 'UK', 'Canada'],
+        required: true
+    },
+    destinationCountry: String,
+    
+    // Shipment Details
+    totalPackages: Number,
+    totalWeight: Number,
+    totalVolume: Number,
     
     // Status
     status: {
         type: String,
-        enum: ['pending', 'assigned', 'consolidated'],
+        enum: ['pending', 'assigned', 'consolidated', 'removed'],
         default: 'pending'
     },
     
-    // Assignment
+    // Reference to consolidation when assigned
     consolidationId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Consolidation'
     },
+    assignedAt: Date,
+    
+    // Tracking
     addedBy: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+        ref: 'User',
+        required: true
     },
     addedAt: {
         type: Date,
         default: Date.now
     },
-    assignedAt: Date,
     
-    // Priority (for sorting)
-    priority: {
-        type: Number,
-        default: 0
-    },
-    
-    notes: String
+    // Expiry (auto-remove after 7 days if not consolidated)
+    expiresAt: {
+        type: Date,
+        default: () => new Date(+new Date() + 7*24*60*60*1000) // 7 days
+    }
 });
 
-// Compound index for fast grouping
-consolidationQueueSchema.index({ groupKey: 1, status: 1, addedAt: 1 });
-// Index for destination-based queries
-consolidationQueueSchema.index({ destination: 1, status: 1 });
+// Compound index for efficient grouping
+consolidationQueueSchema.index({ 
+    mainType: 1, 
+    subType: 1, 
+    origin: 1, 
+    destination: 1, 
+    status: 1 
+});
 
 module.exports = mongoose.model('ConsolidationQueue', consolidationQueueSchema);

@@ -5,7 +5,7 @@ const Shipment = require('../models/shipmentModel');
 
 const generateTrackingNumber = async () => {
     try {
-        const prefix = 'CLC-';
+        const prefix = 'CLG-';
         
         // Simple random generator
         const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';

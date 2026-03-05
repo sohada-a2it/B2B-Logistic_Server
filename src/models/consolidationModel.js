@@ -6,12 +6,29 @@ const consolidationSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
+    
+    // ===== Classification (গ্রুপিং এর জন্য) =====
+    mainType: {
+        type: String,
+        enum: ['sea_freight', 'air_freight', 'inland_trucking', 'multimodal'],
+        required: true
+    },
+    subType: {
+        type: String,
+        enum: [
+            'sea_freight_fcl', 'sea_freight_lcl', 'air_freight',
+            'rail_freight', 'express_delivery', 'inland_transport', 'door_to_door'
+        ],
+        required: true
+    },
+    
     // Shipments in this consolidation
     shipments: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Shipment',
         required: true
     }],
+    
     // Container Information
     containerNumber: {
         type: String,
@@ -27,7 +44,7 @@ const consolidationSchema = new mongoose.Schema({
     // Route Information
     originWarehouse: {
         type: String,
-        default: 'Main Warehouse'
+        required: true
     },
     destinationPort: {
         type: String,
@@ -79,7 +96,7 @@ const consolidationSchema = new mongoose.Schema({
     // Status
     status: {
         type: String,
-        enum: ['draft', 'in_progress', 'completed', 'loaded', 'departed'],
+        enum: ['draft', 'in_progress', 'completed', 'loaded', 'departed', 'arrived'],
         default: 'draft'
     },
     
@@ -110,6 +127,11 @@ const consolidationSchema = new mongoose.Schema({
 }, {
     timestamps: true
 });
+
+// Indexes for faster queries
+consolidationSchema.index({ mainType: 1, subType: 1 });
+consolidationSchema.index({ originWarehouse: 1, destinationPort: 1 });
+consolidationSchema.index({ status: 1, createdAt: -1 });
 
 // Generate consolidation number before saving
 consolidationSchema.pre('save', async function(next) {
