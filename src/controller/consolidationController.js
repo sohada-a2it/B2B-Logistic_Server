@@ -1402,5 +1402,145 @@ exports.getAvailableContainerTypes = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// consolidationController.js
+// controllers/consolidationController.js
+
+exports.markAsReadyForDispatch = async (req, res) => {
+  try {
+    const consolidation = await Consolidation.findById(req.params.id)
+      .populate('shipments');
+
+    // স্টেপ 1: ম্যানুয়াল চেক (ইউজার ক্লিক করবে)
+    if (!consolidation) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    // স্টেপ 2: অটোমেটিক ভ্যালিডেশন (সিস্টেম চেক করবে)
+    const validationResults = await validateForDispatch(consolidation);
+    
+    if (!validationResults.ready) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot mark as ready for dispatch',
+        missing: validationResults.missing,
+        warnings: validationResults.warnings
+      });
+    }
+
+    // স্টেপ 3: সবকিছু ঠিক থাকলে আপডেট করুন
+    consolidation.status = 'ready_for_dispatch';
+    consolidation.readyForDispatch = {
+      markedBy: req.user._id,
+      markedAt: new Date(),
+      autoValidated: true,
+      validationReport: validationResults.report
+    };
+
+    consolidation.timeline.push({
+      status: 'ready_for_dispatch',
+      timestamp: new Date(),
+      description: `✅ Marked ready by ${req.user.name} (Auto-validated)`,
+      metadata: validationResults.summary
+    });
+
+    await consolidation.save();
+
+    // স্টেপ 4: সম্পর্কিত শিপমেন্ট আপডেট
+    await Shipment.updateMany(
+      { _id: { $in: consolidation.shipments } },
+      { 
+        $set: { 
+          status: 'ready_for_dispatch',
+          'metadata.readyForDispatchAt': new Date()
+        }
+      }
+    );
+
+    // স্টেপ 5: নোটিফিকেশন
+    await sendNotifications(consolidation);
+
+    res.json({
+      success: true,
+      data: consolidation,
+      validation: validationResults,
+      message: 'Ready for dispatch (Auto-validated)'
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// অটোমেটিক ভ্যালিডেশন ফাংশন
+const validateForDispatch = async (consolidation) => {
+  const missing = [];
+  const warnings = [];
+  const report = {};
+
+  // 1. স্ট্যাটাস চেক
+  if (consolidation.status !== 'consolidated') {
+    missing.push('Status must be consolidated');
+  }
+
+  // 2. ডকুমেন্ট চেক
+  const requiredDocs = ['packing_list', 'container_manifest'];
+  const uploadedDocTypes = consolidation.documents.map(d => d.type);
+  
+  requiredDocs.forEach(doc => {
+    if (!uploadedDocTypes.includes(doc)) {
+      missing.push(`Missing document: ${doc}`);
+    }
+  });
+
+  // 3. শিপমেন্ট চেক
+  if (!consolidation.shipments || consolidation.shipments.length === 0) {
+    missing.push('No shipments in consolidation');
+  }
+
+  // 4. কন্টেইনার চেক
+  if (!consolidation.containerNumber) {
+    missing.push('Container number required');
+  }
+
+  // 5. ওয়েট/ভলিউম চেক
+  if (consolidation.totalWeight === 0) {
+    warnings.push('Total weight is 0');
+  }
+
+  // 6. তারিখ চেক
+  if (consolidation.estimatedDeparture) {
+    const daysUntilDeparture = Math.ceil(
+      (new Date(consolidation.estimatedDeparture) - new Date()) / (1000 * 60 * 60 * 24)
+    );
+    
+    if (daysUntilDeparture < 0) {
+      warnings.push('Estimated departure date has passed');
+    }
+    
+    report.daysUntilDeparture = daysUntilDeparture;
+  }
+
+  // 7. পেমেন্ট চেক (অপশনাল)
+  const unpaidShipments = consolidation.shipments.filter(
+    s => s.payment?.status !== 'paid' && s.pricingStatus !== 'accepted'
+  );
+  
+  if (unpaidShipments.length > 0) {
+    warnings.push(`${unpaidShipments.length} shipment(s) have payment pending`);
+  }
+
+  return {
+    ready: missing.length === 0,
+    missing,
+    warnings,
+    report,
+    summary: {
+      totalChecks: 7,
+      passed: 7 - missing.length,
+      warnings: warnings.length,
+      timestamp: new Date()
+    }
+  };
+};
 
 module.exports = exports;

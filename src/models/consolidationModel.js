@@ -93,18 +93,57 @@ const consolidationSchema = new mongoose.Schema({
         volume: Number
     }],
     
-    // Status
+    // ===== STATUS UPDATED =====
     status: {
         type: String,
-        enum: ['draft', 'in_progress', 'completed', 'loaded', 'departed', 'arrived'],
+        enum: [
+            'draft',              // খসড়া
+            'in_progress',        // কনসোলিডেশন চলছে
+            'consolidated',       // কনসোলিডেশন সম্পন্ন
+            'ready_for_dispatch', // ডিসপ্যাচের জন্য প্রস্তুত (নতুন)
+            'loaded',             // লোড করা হয়েছে
+            'dispatched',         // ডিসপ্যাচ করা হয়েছে
+            'in_transit',         // ট্রানজিটে
+            'departed',           // পোর্ট ছেড়েছে
+            'arrived',            // পৌঁছেছে
+            'completed'           // সম্পন্ন
+        ],
         default: 'draft'
     },
+    
+    // Tracking Timeline
+    timeline: [{
+        status: {
+            type: String,
+            enum: [
+                'draft', 'in_progress', 'consolidated', 'ready_for_dispatch',
+                'loaded', 'dispatched', 'in_transit', 'departed', 'arrived', 'completed'
+            ]
+        },
+        timestamp: {
+            type: Date,
+            default: Date.now
+        },
+        location: String,
+        description: String,
+        updatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        }
+    }],
     
     // Documents
     documents: [{
         type: {
             type: String,
-            enum: ['packing_list', 'container_manifest', 'bill_of_lading']
+            enum: [
+                'packing_list', 
+                'container_manifest', 
+                'bill_of_lading',
+                'air_waybill',        // এয়ার ফ্রেইটের জন্য
+                'customs_docs',
+                'insurance_certificate'
+            ]
         },
         url: String,
         uploadedAt: Date,
@@ -113,6 +152,15 @@ const consolidationSchema = new mongoose.Schema({
             ref: 'User'
         }
     }],
+    
+    // Carrier Information
+    carrier: {
+        name: String,
+        bookingReference: String,
+        vesselNumber: String,       // জাহাজের জন্য
+        flightNumber: String,       // ফ্লাইটের জন্য
+        vehicleNumber: String       // ট্রাকের জন্য
+    },
     
     // Tracking
     createdBy: {
@@ -132,6 +180,9 @@ const consolidationSchema = new mongoose.Schema({
 consolidationSchema.index({ mainType: 1, subType: 1 });
 consolidationSchema.index({ originWarehouse: 1, destinationPort: 1 });
 consolidationSchema.index({ status: 1, createdAt: -1 });
+consolidationSchema.index({ consolidationNumber: 1 });
+consolidationSchema.index({ containerNumber: 1 });
+consolidationSchema.index({ estimatedDeparture: 1, status: 1 });
 
 // Generate consolidation number before saving
 consolidationSchema.pre('save', async function(next) {
@@ -139,9 +190,47 @@ consolidationSchema.pre('save', async function(next) {
         const count = await this.constructor.countDocuments();
         const year = new Date().getFullYear();
         const month = String(new Date().getMonth() + 1).padStart(2, '0');
-        this.consolidationNumber = `CN-${year}${month}-${String(count + 1).padStart(4, '0')}`;
+        
+        // টাইপ অনুযায়ী প্রিফিক্স
+        let prefix = 'CN';
+        if (this.mainType === 'sea_freight') prefix = 'SCN';
+        if (this.mainType === 'air_freight') prefix = 'ACN';
+        
+        this.consolidationNumber = `${prefix}-${year}${month}-${String(count + 1).padStart(4, '0')}`;
     }
     next();
 });
+
+// Virtual for total value
+consolidationSchema.virtual('totalValue').get(function() {
+    // যদি items এ value থাকে তাহলে যোগ করুন
+    return 0; // আপনার লজিক অনুযায়ী
+});
+
+// Method to update status
+consolidationSchema.methods.updateStatus = async function(newStatus, userId, location, description) {
+    this.status = newStatus;
+    this.updatedBy = userId;
+    
+    // Timeline এ যোগ করুন
+    this.timeline.push({
+        status: newStatus,
+        timestamp: new Date(),
+        location: location || this.currentLocation,
+        description: description || `Status updated to ${newStatus}`,
+        updatedBy: userId
+    });
+    
+    // স্পেসিফিক স্ট্যাটাসের জন্য তারিখ আপডেট
+    if (newStatus === 'consolidated') {
+        this.consolidationCompleted = new Date();
+    } else if (newStatus === 'dispatched' || newStatus === 'departed') {
+        this.actualDeparture = new Date();
+    } else if (newStatus === 'arrived') {
+        this.estimatedArrival = new Date();
+    }
+    
+    return this.save();
+};
 
 module.exports = mongoose.model('Consolidation', consolidationSchema);
