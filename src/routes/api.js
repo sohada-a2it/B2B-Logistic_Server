@@ -223,8 +223,10 @@ router.get('/stats/consolidations', protect, consolidationController.getConsolid
 router.get('/container-types/consolidations', protect, consolidationController.getAvailableContainerTypes);
 router.get('/consolidations/:id', protect, consolidationController.getConsolidationById);
 router.put('/consolidations/:id', protect, adminOnly, consolidationController.updateConsolidation);
+router.put('/consolidations/:id/mark-ready', protect, adminOnly, consolidationController.markAsReadyForDispatch);
 router.put('/consolidations/:id/status', protect, adminOnly, consolidationController.updateConsolidationStatus);
 router.post('/consolidations/:id/add-shipments', protect, adminOnly, consolidationController.addShipmentsToConsolidation);
 router.delete('/consolidations/:id/shipment/:shipmentId', protect, adminOnly, consolidationController.removeShipmentFromConsolidation);
 router.delete('/consolidations/:id', protect, adminOnly, consolidationController.deleteConsolidation);
+router.post('/consolidations/:id/documents', protect,adminOnly, consolidationController.uploadDocument);
 module.exports = router;

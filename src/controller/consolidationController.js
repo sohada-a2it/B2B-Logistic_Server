@@ -1405,69 +1405,99 @@ exports.getAvailableContainerTypes = async (req, res) => {
 // consolidationController.js
 // controllers/consolidationController.js
 
+// controllers/consolidationController.js
+
 exports.markAsReadyForDispatch = async (req, res) => {
   try {
-    const consolidation = await Consolidation.findById(req.params.id)
-      .populate('shipments');
-
-    // স্টেপ 1: ম্যানুয়াল চেক (ইউজার ক্লিক করবে)
-    if (!consolidation) {
-      return res.status(404).json({ success: false, message: 'Not found' });
-    }
-
-    // স্টেপ 2: অটোমেটিক ভ্যালিডেশন (সিস্টেম চেক করবে)
-    const validationResults = await validateForDispatch(consolidation);
+    const { id } = req.params;
     
-    if (!validationResults.ready) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot mark as ready for dispatch',
-        missing: validationResults.missing,
-        warnings: validationResults.warnings
+    console.log('🚀 ===== MARK READY FOR DISPATCH =====');
+    console.log('🚀 ID:', id);
+    console.log('🚀 User:', req.user?._id || req.user?.id);
+    
+    // 1. Consolidation খুঁজুন
+    const consolidation = await Consolidation.findById(id)
+      .populate('shipments');
+    
+    if (!consolidation) {
+      console.log('❌ Consolidation not found');
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Consolidation not found' 
       });
     }
-
-    // স্টেপ 3: সবকিছু ঠিক থাকলে আপডেট করুন
+    
+    console.log('✅ Consolidation found:', consolidation.consolidationNumber);
+    console.log('📦 Current status:', consolidation.status);
+    
+    // 2. স্ট্যাটাস চেক
+    if (consolidation.status !== 'consolidated') {
+      console.log('❌ Wrong status:', consolidation.status);
+      return res.status(400).json({
+        success: false,
+        message: `Cannot mark as ready. Current status: ${consolidation.status}`
+      });
+    }
+    
+    // 3. ডকুমেন্ট চেক (optional - যদি documents থাকে)
+    if (consolidation.documents && consolidation.documents.length > 0) {
+      console.log('📄 Documents found:', consolidation.documents.length);
+    } else {
+      console.log('⚠️ No documents found, but continuing...');
+    }
+    
+    // 4. স্ট্যাটাস আপডেট করুন
     consolidation.status = 'ready_for_dispatch';
-    consolidation.readyForDispatch = {
-      markedBy: req.user._id,
-      markedAt: new Date(),
-      autoValidated: true,
-      validationReport: validationResults.report
-    };
-
+    
+    // 5. Timeline এ যোগ করুন
+    if (!consolidation.timeline) {
+      consolidation.timeline = [];
+    }
+    
     consolidation.timeline.push({
       status: 'ready_for_dispatch',
       timestamp: new Date(),
-      description: `✅ Marked ready by ${req.user.name} (Auto-validated)`,
-      metadata: validationResults.summary
+      description: `Marked ready for dispatch by ${req.user?.firstName || 'System'}`,
+      updatedBy: req.user?._id
     });
-
+    
+    // 6. Save করুন
     await consolidation.save();
-
-    // স্টেপ 4: সম্পর্কিত শিপমেন্ট আপডেট
-    await Shipment.updateMany(
-      { _id: { $in: consolidation.shipments } },
-      { 
-        $set: { 
-          status: 'ready_for_dispatch',
-          'metadata.readyForDispatchAt': new Date()
-        }
+    console.log('✅ Status updated to ready_for_dispatch');
+    
+    // 7. সম্পর্কিত শিপমেন্ট আপডেট (optional)
+    if (consolidation.shipments && consolidation.shipments.length > 0) {
+      try {
+        await Shipment.updateMany(
+          { _id: { $in: consolidation.shipments.map(s => s._id) } },
+          { 
+            $set: { 
+              status: 'ready_for_dispatch'
+            }
+          }
+        );
+        console.log('✅ Shipments updated');
+      } catch (shipmentError) {
+        console.error('⚠️ Shipment update error:', shipmentError);
+        // Don't fail the whole request
       }
-    );
-
-    // স্টেপ 5: নোটিফিকেশন
-    await sendNotifications(consolidation);
-
+    }
+    
     res.json({
       success: true,
-      data: consolidation,
-      validation: validationResults,
-      message: 'Ready for dispatch (Auto-validated)'
+      message: 'Consolidation marked as ready for dispatch',
+      data: consolidation
     });
 
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('❌ Mark as ready error:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    res.status(500).json({ 
+      success: false, 
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 
@@ -1542,5 +1572,87 @@ const validateForDispatch = async (consolidation) => {
     }
   };
 };
+// controllers/consolidationController.js - একদম শেষে এই ফাংশন যোগ করুন
 
+/**
+ * Upload document to consolidation
+ */
+// controllers/consolidationController.js
+
+/**
+ * Upload document to consolidation
+ */
+// controllers/consolidationController.js
+
+exports.uploadDocument = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, fileName, fileData, autoGenerated } = req.body;
+    
+    console.log('📄 Uploading document:', { type, fileName, autoGenerated });
+    
+    const consolidation = await Consolidation.findById(id);
+    if (!consolidation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consolidation not found'
+      });
+    }
+
+    // Allowed types check
+    const allowedTypes = ['packing_list', 'container_manifest', 'bill_of_lading', 'air_waybill', 'customs_docs', 'insurance_certificate'];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid document type'
+      });
+    }
+
+    // Documents array initialize
+    if (!consolidation.documents) {
+      consolidation.documents = [];
+    }
+
+    // 🔥🔥🔥 সব ডাটা সহ document object তৈরি করুন 🔥🔥🔥
+    const document = {
+      type: type,
+      fileName: fileName,           // ← এইটা非常重要!
+      fileData: fileData,           // ← এইটা非常重要! (base64 data)
+      uploadedAt: new Date(),
+      uploadedBy: req.user._id,
+      autoGenerated: autoGenerated || true
+    };
+
+    // Duplicate check - যদি already থাকে তাহলে replace করুন
+    const existingIndex = consolidation.documents.findIndex(d => d.type === type);
+    if (existingIndex !== -1) {
+      consolidation.documents[existingIndex] = document;
+      console.log('🔄 Replaced existing document');
+    } else {
+      consolidation.documents.push(document);
+      console.log('✅ Added new document');
+    }
+
+    await consolidation.save();
+    
+    console.log('✅ Document saved with fileName:', fileName);
+
+    res.status(200).json({
+      success: true,
+      message: 'Document uploaded successfully',
+      data: {
+        type: document.type,
+        fileName: document.fileName,
+        uploadedAt: document.uploadedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Upload error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
 module.exports = exports;
