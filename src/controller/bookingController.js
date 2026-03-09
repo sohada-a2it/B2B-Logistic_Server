@@ -1465,7 +1465,749 @@ exports.getMyBookingsSummary = async (req, res) => {
         });
     }
 };
+// ========== 1. GET ALL INVOICES (Admin Only) ==========
+exports.getAllInvoices = async (req, res) => {
+    try {
+        const { 
+            page = 1, 
+            limit = 20, 
+            status, 
+            paymentStatus,
+            customerId,
+            startDate,
+            endDate,
+            sort = '-createdAt' 
+        } = req.query;
 
+        // Build filter query
+        let filter = {};
+        
+        if (status) filter.status = status;
+        if (paymentStatus) filter.paymentStatus = paymentStatus;
+        if (customerId) filter.customerId = customerId;
+        
+        // Date range filter
+        if (startDate || endDate) {
+            filter.createdAt = {};
+            if (startDate) filter.createdAt.$gte = new Date(startDate);
+            if (endDate) filter.createdAt.$lte = new Date(endDate);
+        }
+
+        // Get total count
+        const total = await Invoice.countDocuments(filter);
+
+        // Get invoices with pagination
+        const invoices = await Invoice.find(filter)
+            .populate('customerId', 'firstName lastName companyName email phone')
+            .populate('bookingId', 'bookingNumber')
+            .populate('createdBy', 'firstName lastName')
+            .populate('updatedBy', 'firstName lastName')
+            .sort(sort)
+            .limit(parseInt(limit))
+            .skip((parseInt(page) - 1) * parseInt(limit));
+
+        // Calculate summary
+        const summary = await Invoice.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    totalAmount: { $sum: '$totalAmount' },
+                    paidAmount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'paid'] }, '$totalAmount', 0]
+                        }
+                    },
+                    pendingAmount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'pending'] }, '$totalAmount', 0]
+                        }
+                    },
+                    overdueAmount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'overdue'] }, '$totalAmount', 0]
+                        }
+                    },
+                    count: { $sum: 1 },
+                    paidCount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'paid'] }, 1, 0]
+                        }
+                    },
+                    pendingCount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'pending'] }, 1, 0]
+                        }
+                    },
+                    overdueCount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'overdue'] }, 1, 0]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: invoices,
+            summary: summary[0] || {
+                totalAmount: 0,
+                paidAmount: 0,
+                pendingAmount: 0,
+                overdueAmount: 0,
+                count: 0,
+                paidCount: 0,
+                pendingCount: 0,
+                overdueCount: 0
+            },
+            pagination: {
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
+            }
+        });
+
+    } catch (error) {
+        console.error('Get all invoices error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 2. GET INVOICE BY ID ==========
+exports.getInvoiceById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const invoice = await Invoice.findById(id)
+            .populate('customerId', 'firstName lastName companyName email phone address')
+            .populate('bookingId')
+            .populate('shipmentId')
+            .populate('createdBy', 'firstName lastName email')
+            .populate('updatedBy', 'firstName lastName email');
+
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Invoice not found'
+            });
+        }
+
+        // Check permission (customer can only see their own)
+        if (req.user.role === 'customer' && invoice.customerId._id.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. You can only view your own invoices.'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: invoice
+        });
+
+    } catch (error) {
+        console.error('Get invoice by id error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 3. GET INVOICES BY CUSTOMER ==========
+exports.getInvoicesByCustomer = async (req, res) => {
+    try {
+        const { customerId } = req.params;
+        const { page = 1, limit = 20, status } = req.query;
+
+        // Check permission (customer can only see their own)
+        if (req.user.role === 'customer' && customerId !== req.user._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. You can only view your own invoices.'
+            });
+        }
+
+        let filter = { customerId };
+        if (status) filter.paymentStatus = status;
+
+        const total = await Invoice.countDocuments(filter);
+
+        const invoices = await Invoice.find(filter)
+            .populate('bookingId', 'bookingNumber')
+            .populate('createdBy', 'firstName lastName')
+            .sort('-createdAt')
+            .limit(parseInt(limit))
+            .skip((parseInt(page) - 1) * parseInt(limit));
+
+        // Calculate customer total
+        const totals = await Invoice.aggregate([
+            { $match: { customerId: new mongoose.Types.ObjectId(customerId) } },
+            {
+                $group: {
+                    _id: null,
+                    totalAmount: { $sum: '$totalAmount' },
+                    paidAmount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'paid'] }, '$totalAmount', 0]
+                        }
+                    },
+                    pendingAmount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'pending'] }, '$totalAmount', 0]
+                        }
+                    },
+                    overdueAmount: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'overdue'] }, '$totalAmount', 0]
+                        }
+                    },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: invoices,
+            summary: totals[0] || {
+                totalAmount: 0,
+                paidAmount: 0,
+                pendingAmount: 0,
+                overdueAmount: 0,
+                count: 0
+            },
+            pagination: {
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit)),
+                limit: parseInt(limit)
+            }
+        });
+
+    } catch (error) {
+        console.error('Get invoices by customer error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 4. UPDATE INVOICE ==========
+exports.updateInvoice = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updateData = req.body;
+
+        // Check if invoice exists
+        const invoice = await Invoice.findById(id);
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Invoice not found'
+            });
+        }
+
+        // Remove fields that shouldn't be updated directly
+        delete updateData._id;
+        delete updateData.invoiceNumber;
+        delete updateData.createdAt;
+        delete updateData.createdBy;
+
+        // Recalculate totals if charges updated
+        if (updateData.charges) {
+            const { subtotal, taxAmount, totalAmount } = calculateTotals(
+                updateData.charges,
+                updateData.taxRate || invoice.taxRate,
+                updateData.discountAmount || invoice.discountAmount
+            );
+            updateData.subtotal = subtotal;
+            updateData.taxAmount = taxAmount;
+            updateData.totalAmount = totalAmount;
+        }
+
+        updateData.updatedBy = req.user._id;
+        updateData.updatedAt = new Date();
+
+        const updatedInvoice = await Invoice.findByIdAndUpdate(
+            id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).populate('customerId', 'firstName lastName companyName email');
+
+        res.status(200).json({
+            success: true,
+            message: 'Invoice updated successfully',
+            data: updatedInvoice
+        });
+
+    } catch (error) {
+        console.error('Update invoice error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 5. DELETE INVOICE ==========
+exports.deleteInvoice = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Check if invoice exists
+        const invoice = await Invoice.findById(id);
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Invoice not found'
+            });
+        }
+
+        // Check if invoice can be deleted (only draft or cancelled)
+        if (!['draft', 'cancelled'].includes(invoice.status)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Only draft or cancelled invoices can be deleted'
+            });
+        }
+
+        // Remove reference from booking
+        await Booking.findByIdAndUpdate(invoice.bookingId, {
+            $unset: { invoiceId: 1 }
+        });
+
+        // Delete invoice
+        await Invoice.findByIdAndDelete(id);
+
+        res.status(200).json({
+            success: true,
+            message: 'Invoice deleted successfully'
+        });
+
+    } catch (error) {
+        console.error('Delete invoice error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 6. MARK INVOICE AS PAID ==========
+exports.markAsPaid = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { paymentMethod, paymentReference, notes } = req.body;
+
+        const invoice = await Invoice.findById(id);
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Invoice not found'
+            });
+        }
+
+        if (invoice.paymentStatus === 'paid') {
+            return res.status(400).json({
+                success: false,
+                message: 'Invoice is already marked as paid'
+            });
+        }
+
+        invoice.markAsPaid(paymentMethod, paymentReference, req.user._id);
+        
+        if (notes) {
+            invoice.notes = notes;
+        }
+
+        await invoice.save();
+
+        // Send email notification to customer
+        try {
+            const customer = await User.findById(invoice.customerId);
+            if (customer?.email) {
+                await sendEmail({
+                    to: customer.email,
+                    subject: '✅ Payment Received - Invoice ' + invoice.invoiceNumber,
+                    template: 'payment-received',
+                    data: {
+                        customerName: customer.firstName || 'Customer',
+                        invoiceNumber: invoice.invoiceNumber,
+                        amount: invoice.totalAmount,
+                        currency: invoice.currency,
+                        paymentDate: new Date().toLocaleDateString(),
+                        invoiceUrl: `${process.env.FRONTEND_URL}/customer/invoices/${invoice._id}`
+                    }
+                });
+            }
+        } catch (emailError) {
+            console.error('Payment email error:', emailError);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Invoice marked as paid',
+            data: invoice
+        });
+
+    } catch (error) {
+        console.error('Mark as paid error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 7. SEND INVOICE EMAIL ==========
+exports.sendInvoiceEmail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { email, message } = req.body;
+
+        const invoice = await Invoice.findById(id)
+            .populate('customerId', 'firstName lastName email companyName');
+
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Invoice not found'
+            });
+        }
+
+        const recipientEmail = email || invoice.customerId?.email;
+        
+        if (!recipientEmail) {
+            return res.status(400).json({
+                success: false,
+                message: 'No email address provided or found'
+            });
+        }
+
+        // Send email
+        await sendEmail({
+            to: recipientEmail,
+            subject: `🧾 Invoice ${invoice.invoiceNumber} from Cargo Logistics`,
+            template: 'invoice-email',
+            data: {
+                customerName: invoice.customerId?.firstName || 'Customer',
+                invoiceNumber: invoice.invoiceNumber,
+                amount: invoice.totalAmount,
+                currency: invoice.currency,
+                dueDate: invoice.dueDate,
+                invoiceUrl: `${process.env.FRONTEND_URL}/invoices/${invoice._id}`,
+                pdfUrl: invoice.pdfUrl,
+                message: message || 'Please find your invoice attached.',
+                companyName: 'Cargo Logistics'
+            }
+        });
+
+        // Update invoice
+        invoice.emailSent = true;
+        invoice.emailSentAt = new Date();
+        invoice.emailedTo = invoice.emailedTo || [];
+        invoice.emailedTo.push(recipientEmail);
+        invoice.status = 'sent';
+        await invoice.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Invoice email sent successfully'
+        });
+
+    } catch (error) {
+        console.error('Send invoice email error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 8. GET INVOICE STATS (Admin Dashboard) ==========
+exports.getInvoiceStats = async (req, res) => {
+    try {
+        const stats = await Invoice.aggregate([
+            {
+                $facet: {
+                    // Status breakdown
+                    statusBreakdown: [
+                        {
+                            $group: {
+                                _id: '$paymentStatus',
+                                count: { $sum: 1 },
+                                total: { $sum: '$totalAmount' }
+                            }
+                        }
+                    ],
+                    
+                    // Monthly revenue
+                    monthlyRevenue: [
+                        {
+                            $match: {
+                                paymentStatus: 'paid',
+                                paymentDate: { $exists: true }
+                            }
+                        },
+                        {
+                            $group: {
+                                _id: {
+                                    year: { $year: '$paymentDate' },
+                                    month: { $month: '$paymentDate' }
+                                },
+                                total: { $sum: '$totalAmount' },
+                                count: { $sum: 1 }
+                            }
+                        },
+                        { $sort: { '_id.year': -1, '_id.month': -1 } },
+                        { $limit: 12 }
+                    ],
+                    
+                    // Overdue invoices
+                    overdueInvoices: [
+                        {
+                            $match: {
+                                paymentStatus: 'pending',
+                                dueDate: { $lt: new Date() }
+                            }
+                        },
+                        {
+                            $count: 'count'
+                        }
+                    ],
+                    
+                    // Total statistics
+                    totals: [
+                        {
+                            $group: {
+                                _id: null,
+                                totalInvoices: { $sum: 1 },
+                                totalAmount: { $sum: '$totalAmount' },
+                                paidAmount: {
+                                    $sum: {
+                                        $cond: [{ $eq: ['$paymentStatus', 'paid'] }, '$totalAmount', 0]
+                                    }
+                                },
+                                pendingAmount: {
+                                    $sum: {
+                                        $cond: [{ $eq: ['$paymentStatus', 'pending'] }, '$totalAmount', 0]
+                                    }
+                                },
+                                overdueAmount: {
+                                    $sum: {
+                                        $cond: [{ $eq: ['$paymentStatus', 'overdue'] }, '$totalAmount', 0]
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                statusBreakdown: stats[0].statusBreakdown,
+                monthlyRevenue: stats[0].monthlyRevenue,
+                overdueCount: stats[0].overdueInvoices[0]?.count || 0,
+                totals: stats[0].totals[0] || {
+                    totalInvoices: 0,
+                    totalAmount: 0,
+                    paidAmount: 0,
+                    pendingAmount: 0,
+                    overdueAmount: 0
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Get invoice stats error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 9. GENERATE INVOICE PDF ==========
+exports.generateInvoicePDF = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const invoice = await Invoice.findById(id)
+            .populate('customerId', 'firstName lastName companyName email phone address')
+            .populate('bookingId', 'bookingNumber sender receiver shipmentDetails');
+
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Invoice not found'
+            });
+        }
+
+        // Generate PDF URL (implement with PDF library)
+        const pdfUrl = await generateInvoicePDF(invoice);
+
+        // Update invoice with PDF URL
+        invoice.pdfUrl = pdfUrl;
+        await invoice.save();
+
+        res.status(200).json({
+            success: true,
+            data: { pdfUrl }
+        });
+
+    } catch (error) {
+        console.error('Generate PDF error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 10. BULK UPDATE INVOICES ==========
+exports.bulkUpdateInvoices = async (req, res) => {
+    try {
+        const { invoiceIds, updateData } = req.body;
+
+        if (!invoiceIds || !Array.isArray(invoiceIds) || invoiceIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide invoice IDs array'
+            });
+        }
+
+        // Remove fields that shouldn't be bulk updated
+        delete updateData._id;
+        delete updateData.invoiceNumber;
+        delete updateData.createdAt;
+        delete updateData.createdBy;
+
+        updateData.updatedBy = req.user._id;
+        updateData.updatedAt = new Date();
+
+        const result = await Invoice.updateMany(
+            { _id: { $in: invoiceIds } },
+            { $set: updateData },
+            { runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `Updated ${result.modifiedCount} invoices successfully`,
+            data: result
+        });
+
+    } catch (error) {
+        console.error('Bulk update error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 11. GET RECENT INVOICES ==========
+exports.getRecentInvoices = async (req, res) => {
+    try {
+        const { limit = 10 } = req.query;
+
+        const invoices = await Invoice.find()
+            .populate('customerId', 'firstName lastName companyName')
+            .populate('bookingId', 'bookingNumber')
+            .sort('-createdAt')
+            .limit(parseInt(limit));
+
+        res.status(200).json({
+            success: true,
+            data: invoices
+        });
+
+    } catch (error) {
+        console.error('Get recent invoices error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 12. GET INVOICE BY BOOKING ID ==========
+exports.getInvoiceByBooking = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+
+        const invoice = await Invoice.findOne({ bookingId })
+            .populate('customerId', 'firstName lastName companyName email')
+            .populate('bookingId');
+
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'No invoice found for this booking'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: invoice
+        });
+
+    } catch (error) {
+        console.error('Get invoice by booking error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// ========== 13. GET INVOICE BY SHIPMENT ID ==========
+exports.getInvoiceByShipment = async (req, res) => {
+    try {
+        const { shipmentId } = req.params;
+
+        const invoice = await Invoice.findOne({ shipmentId })
+            .populate('customerId', 'firstName lastName companyName email')
+            .populate('bookingId');
+
+        if (!invoice) {
+            return res.status(404).json({
+                success: false,
+                message: 'No invoice found for this shipment'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: invoice
+        });
+
+    } catch (error) {
+        console.error('Get invoice by shipment error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+};
+
+// Helper function to calculate totals
+const calculateTotals = (charges, taxRate, discountAmount) => {
+    const subtotal = charges.reduce((sum, charge) => sum + (charge.amount || 0), 0);
+    const taxAmount = subtotal * (taxRate / 100);
+    const totalAmount = subtotal + taxAmount - (discountAmount || 0);
+    
+    return { subtotal, taxAmount, totalAmount };
+};
 // ========== 14. TRACK BY NUMBER (Public) ==========
 // controllers/trackingController.js
 

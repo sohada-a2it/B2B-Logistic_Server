@@ -6,6 +6,7 @@ const bookingController = require('../controller/bookingController');
 const shipmentController = require('../controller/shipmentController');
 const warehouseController = require('../controller/warehouseController');
 const consolidationController = require('../controller/consolidationController');
+const trackingController = require('../controller/trackingController');
 const { body } = require('express-validator');
 // ==================== PUBLIC ROUTES (No Authentication Needed) ==================== 
 router.post("/login", userController.loginUser);  
@@ -60,7 +61,104 @@ router.get('/my-bookings/:id/timeline',protect,  bookingController.getMyBookingT
 
 router.get('/my-bookings/:id/invoice', protect,  bookingController.getMyBookingInvoice);
 
-router.get('/my-bookings/:id/quote', protect,  bookingController.getMyBookingQuote);  
+router.get('/my-bookings/:id/quote', protect,  bookingController.getMyBookingQuote);   
+
+router.get(
+    '/my-bookings/invoiceSummary', 
+    protect, 
+    bookingController.getMyBookingsSummary
+);
+
+router.get(
+    '/getInvoices/:customerId', 
+    protect, 
+    bookingController.getInvoicesByCustomer
+);
+
+// ========== ADMIN ONLY ROUTES ==========
+router.get(
+    '/getAllInvoices', 
+    protect, 
+    adminOnly, 
+    bookingController.getAllInvoices
+);
+
+router.get(
+    '/getInvoiceStats', 
+    protect, 
+    adminOnly, 
+    bookingController.getInvoiceStats
+);
+
+router.get(
+    '/getRecentInvoices', 
+    protect, 
+    adminOnly, 
+    bookingController.getRecentInvoices
+);
+
+router.get(
+    '/getinvoice/:bookingId', 
+    protect, 
+    adminOnly, 
+    bookingController.getInvoiceByBooking
+);
+
+router.get(
+    '/getinvoice/:shipmentId', 
+    protect, 
+    adminOnly, 
+    bookingController.getInvoiceByShipment
+);
+
+router.get(
+    '/getInvoiceById/:id', 
+    protect, 
+    adminOnly, 
+    bookingController.getInvoiceById
+);
+
+router.put(
+    '/updateInvoice/:id', 
+    protect, 
+    adminOnly, 
+    bookingController.updateInvoice
+);
+
+router.delete(
+    '/deleteInvoice/:id', 
+    protect, 
+    adminOnly, 
+    bookingController.deleteInvoice
+);
+
+router.post(
+    '/mark-paid/:id', 
+    protect, 
+    adminOnly, 
+    bookingController.markAsPaid
+);
+
+router.post(
+    '/invoice/:id/send-email', 
+    protect, 
+    adminOnly, 
+    bookingController.sendInvoiceEmail
+);
+
+router.post(
+    '/invoice/:id/generate-pdf', 
+    protect, 
+    adminOnly, 
+    bookingController.generateInvoicePDF
+);
+
+router.post( 
+    '/invoice/bulk-update', 
+    protect, 
+    adminOnly, 
+    bookingController.bulkUpdateInvoices
+); 
 // shipment
 // ==================== PUBLIC ROUTES ==================== 
 // ========== PUBLIC TRACKING (No Auth Required) ==========
@@ -229,4 +327,21 @@ router.post('/consolidations/:id/add-shipments', protect, adminOnly, consolidati
 router.delete('/consolidations/:id/shipment/:shipmentId', protect, adminOnly, consolidationController.removeShipmentFromConsolidation);
 router.delete('/consolidations/:id', protect, adminOnly, consolidationController.deleteConsolidation);
 router.post('/consolidations/:id/documents', protect,adminOnly, consolidationController.uploadDocument);
+
+// tracking routes 
+
+// Main routes
+router.get('/getAllTracking',protect,adminOnly, trackingController.getAllTrackings);
+router.get('/tracking/stats',protect,adminOnly, trackingController.getTrackingStats);
+router.get('/tracking/search',protect,adminOnly, trackingController.searchTrackings);
+router.get('/tracking/export',protect,adminOnly, trackingController.exportTrackings);
+router.get('/tracking/:id', protect, adminOnly, trackingController.getTrackingById);
+
+// Update routes
+router.put('/tracking/:id',protect,adminOnly, trackingController.updateTrackingStatus);
+router.put('/tracking/bulk/update',protect,adminOnly, trackingController.bulkUpdateTrackings);
+
+// Delete routes
+router.delete('/tracking/:id',protect,adminOnly, trackingController.deleteTracking);
+router.post('/tracking/bulk/delete',protect,adminOnly, trackingController.bulkDeleteTrackings);
 module.exports = router;
