@@ -16,7 +16,9 @@ router.post("/customer/resend-otp", userController.resendOTP);
 router.post("/admin/setup", userController.createAdmin); 
 router.post("/forgot-password", userController.forgotPassword); 
 router.post("/reset-password", userController.resetPassword);        
-
+router.post("/verify-reset-otp", userController.verifyResetOTP);
+router.post("/resend-reset-otp", userController.resendResetOTP); 
+router.post("/reset-password", userController.resetPassword); 
 // ==================== PROTECTED ROUTES (Authentication Needed) ====================
 // COMMON ROUTES (All Authenticated Users)
 router.get("/getUserprofile", protect, userController.getUserProfile);

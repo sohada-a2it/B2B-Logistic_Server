@@ -3,14 +3,16 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const route = require('./src/routes/api');
-
+const quoteRoutes = require('./src/service/quoteTamplate');
+const contactRoutes = require('./src/service/contactTamplate');
 const app = express();
 
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
-
+app.use('/api/v1', quoteRoutes);
+app.use("/api/v1", contactRoutes);
 // Logging middleware
 app.use((req, res, next) => {
   console.log(`\n📨 ${new Date().toISOString()} - ${req.method} ${req.url}`);
@@ -43,7 +45,6 @@ try {
 
 // Routes
 app.use("/api/v1", route); 
-
 // 404 handler
 app.use("*", (req, res) => {
   res.status(404).json({ message: "Route not found" });

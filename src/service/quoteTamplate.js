@@ -1,152 +1,121 @@
-import { NextResponse } from 'next/server';
-import nodemailer from 'nodemailer';
+// B2B-Logistic_Server/src/routes/quoteRoutes.js
 
-// Email transporter setup
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: parseInt(process.env.SMTP_PORT),
-  secure: process.env.SMTP_SECURE === 'true',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+const express = require('express');
+const router = express.Router();
+const nodemailer = require('nodemailer');
 
-// ভ্যালিডেশন ফাংশন
-function validateFormData(data) {
-  const errors = {};
+// ========== Email Transporter ==========
+const createTransporter = () => {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+};
 
-  if (!data.origin) errors.origin = 'Origin is required';
-  if (!data.destination) errors.destination = 'Destination is required';
-  if (!data.freightType) errors.freightType = 'Freight type is required';
-  if (!data.weight?.trim()) errors.weight = 'Weight is required';
-  if (!data.name?.trim()) errors.name = 'Name is required';
-  if (!data.address?.trim()) errors.address = 'Address is required';
-  
-  if (!data.email?.trim()) {
-    errors.email = 'Email is required';
-  } else if (!/\S+@\S+\.\S+/.test(data.email)) {
-    errors.email = 'Invalid email format';
-  }
+// ========== Simple Quote ID Generator (crypto ছাড়া) ==========
+const generateQuoteId = () => {
+  const date = new Date();
+  const year = date.getFullYear().toString().slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const random = Math.floor(1000 + Math.random() * 9000); // 4-digit random number
+  return `QTE-${year}${month}${day}-${random}`;
+};
 
-  if (!data.phone?.trim()) {
-    errors.phone = 'Phone is required';
-  }
-
-  if (!data.agreeToTerms) {
-    errors.agreeToTerms = 'You must agree to terms';
-  }
-
-  return {
-    isValid: Object.keys(errors).length === 0,
-    errors
-  };
-}
-
-// অ্যাডমিন ইমেল টেমপ্লেট
-const getAdminEmailTemplate = (data) => {
+// ========== Admin Email Template ==========
+const getAdminEmailTemplate = (data, quoteId) => {
   return `
     <!DOCTYPE html>
     <html>
     <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>New Quote Request</title>
       <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
-        .container { max-width: 600px; margin: 20px auto; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 3px; border-radius: 20px; }
-        .content { background: white; border-radius: 18px; padding: 30px; }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { color: #764ba2; margin: 0; font-size: 28px; }
-        .badge { background: #f0f0f0; display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 14px; color: #666; margin-top: 10px; }
-        .section { margin-bottom: 30px; }
-        .section-title { color: #764ba2; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; margin-bottom: 20px; font-size: 20px; }
-        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .info-item { background: #f8f9fa; padding: 12px 15px; border-radius: 10px; }
-        .info-label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
-        .info-value { font-size: 16px; font-weight: 600; color: #333; }
-        .instructions-box { background: #fff3e0; padding: 20px; border-radius: 10px; border-left: 4px solid #ff9800; }
-        .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #f0f0f0; color: #999; font-size: 14px; }
-        .status-badge { background: #4CAF50; color: white; padding: 8px 16px; border-radius: 20px; display: inline-block; font-size: 14px; }
+        body { font-family: Arial, sans-serif; line-height: 1.6; background: #f4f4f4; }
+        .container { max-width: 600px; margin: 20px auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .header { background: #2563eb; color: white; padding: 20px; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .content { padding: 30px; }
+        .quote-badge { background: #e2e8f0; display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 14px; margin: 10px 0; }
+        .info-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin: 15px 0; }
+        .info-row { display: flex; margin-bottom: 10px; border-bottom: 1px dashed #e2e8f0; padding-bottom: 5px; }
+        .info-label { width: 120px; font-weight: bold; color: #4b5563; }
+        .info-value { flex: 1; color: #1e293b; }
+        .footer { background: #f8fafc; padding: 20px; text-align: center; color: #64748b; font-size: 14px; border-top: 1px solid #e2e8f0; }
       </style>
     </head>
     <body>
       <div class="container">
+        <div class="header">
+          <h1>🚚 New Quote Request</h1>
+        </div>
         <div class="content">
-          <div class="header">
-            <h1>🚚 New Quote Request</h1>
-            <div class="badge">Received: ${new Date().toLocaleString()}</div>
+          <div style="text-align: center; margin-bottom: 20px;">
+            <span class="quote-badge">Quote ID: ${quoteId}</span>
           </div>
-
-          <div class="section">
-            <h2 class="section-title">📦 Shipment Details</h2>
-            <div class="info-grid">
-              <div class="info-item">
-                <div class="info-label">Origin</div>
-                <div class="info-value">${data.origin}</div>
-              </div>
-              <div class="info-item">
-                <div class="info-label">Destination</div>
-                <div class="info-value">${data.destination}</div>
-              </div>
-              <div class="info-item">
-                <div class="info-label">Freight Type</div>
-                <div class="info-value">${data.freightType}</div>
-              </div>
-              <div class="info-item">
-                <div class="info-label">Weight</div>
-                <div class="info-value">${data.weight}</div>
-              </div>
-              ${data.dimensions ? `
-              <div class="info-item">
-                <div class="info-label">Dimensions</div>
-                <div class="info-value">${data.dimensions}</div>
-              </div>
-              ` : ''}
+          
+          <h3>📋 Shipment Details</h3>
+          <div class="info-box">
+            <div class="info-row">
+              <span class="info-label">From:</span>
+              <span class="info-value">${data.origin}</span>
             </div>
+            <div class="info-row">
+              <span class="info-label">To:</span>
+              <span class="info-value">${data.destination}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Freight Type:</span>
+              <span class="info-value">${data.freightType}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Weight:</span>
+              <span class="info-value">${data.weight}</span>
+            </div>
+            ${data.dimensions ? `
+            <div class="info-row">
+              <span class="info-label">Dimensions:</span>
+              <span class="info-value">${data.dimensions}</span>
+            </div>` : ''}
           </div>
 
-          <div class="section">
-            <h2 class="section-title">👤 Contact Information</h2>
-            <div class="info-grid">
-              <div class="info-item">
-                <div class="info-label">Name</div>
-                <div class="info-value">${data.name}</div>
-              </div>
-              <div class="info-item">
-                <div class="info-label">Email</div>
-                <div class="info-value">${data.email}</div>
-              </div>
-              <div class="info-item">
-                <div class="info-label">Phone</div>
-                <div class="info-value">${data.phone}</div>
-              </div>
-              ${data.company ? `
-              <div class="info-item">
-                <div class="info-label">Company</div>
-                <div class="info-value">${data.company}</div>
-              </div>
-              ` : ''}
-              <div class="info-item" style="grid-column: span 2;">
-                <div class="info-label">Address</div>
-                <div class="info-value">${data.address}</div>
-              </div>
+          <h3>👤 Customer Information</h3>
+          <div class="info-box">
+            <div class="info-row">
+              <span class="info-label">Name:</span>
+              <span class="info-value">${data.name}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Email:</span>
+              <span class="info-value">${data.email}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Phone:</span>
+              <span class="info-value">${data.phone}</span>
+            </div>
+            ${data.company ? `
+            <div class="info-row">
+              <span class="info-label">Company:</span>
+              <span class="info-value">${data.company}</span>
+            </div>` : ''}
+            <div class="info-row">
+              <span class="info-label">Address:</span>
+              <span class="info-value">${data.address}</span>
             </div>
           </div>
 
           ${data.instructions ? `
-          <div class="section">
-            <h2 class="section-title">📝 Special Instructions</h2>
-            <div class="instructions-box">
-              ${data.instructions}
-            </div>
-          </div>
-          ` : ''}
-
-          <div class="footer">
-            <div class="status-badge">Quote ID: ${data.quoteId}</div>
-            <p style="margin-top: 20px;">This request requires your attention. Please respond within 24 hours.</p>
-          </div>
+          <h3>📝 Special Instructions</h3>
+          <div class="info-box">
+            <p style="margin: 0;">${data.instructions}</p>
+          </div>` : ''}
+        </div>
+        <div class="footer">
+          <p>Received: ${new Date().toLocaleString()}</p>
+          <p>Please respond within 24 hours</p>
         </div>
       </div>
     </body>
@@ -154,61 +123,58 @@ const getAdminEmailTemplate = (data) => {
   `;
 };
 
-// কাস্টমার ইমেল টেমপ্লেট
-const getCustomerEmailTemplate = (data) => {
+// ========== Customer Email Template ==========
+const getCustomerEmailTemplate = (data, quoteId) => {
   return `
     <!DOCTYPE html>
     <html>
     <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Quote Request Received</title>
       <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
-        .container { max-width: 600px; margin: 20px auto; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 3px; border-radius: 20px; }
-        .content { background: white; border-radius: 18px; padding: 30px; }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { color: #764ba2; margin: 0; font-size: 28px; }
-        .badge { background: #f0f0f0; display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 14px; color: #666; margin-top: 10px; }
-        .message-box { background: #e8f5e9; padding: 20px; border-radius: 10px; text-align: center; margin: 30px 0; }
-        .checkmark { font-size: 48px; color: #4CAF50; margin-bottom: 10px; }
-        .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #f0f0f0; color: #999; font-size: 14px; }
+        body { font-family: Arial, sans-serif; line-height: 1.6; background: #f4f4f4; }
+        .container { max-width: 600px; margin: 20px auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .header { background: #10b981; color: white; padding: 20px; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .content { padding: 30px; }
+        .success-icon { text-align: center; font-size: 48px; margin: 20px 0; }
+        .quote-badge { background: #e2e8f0; display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 14px; margin: 10px 0; }
+        .message-box { background: #d1fae5; border: 1px solid #a7f3d0; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0; }
+        .summary-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .footer { background: #f8fafc; padding: 20px; text-align: center; color: #64748b; font-size: 14px; border-top: 1px solid #e2e8f0; }
       </style>
     </head>
     <body>
       <div class="container">
+        <div class="header">
+          <h1>✓ Quote Request Received!</h1>
+        </div>
         <div class="content">
-          <div class="header">
-            <h1>✓ Quote Request Received!</h1>
-            <div class="badge">Reference: ${data.quoteId}</div>
-          </div>
-
+          <div class="success-icon">✅</div>
+          
           <div class="message-box">
-            <div class="checkmark">✅</div>
-            <h2 style="margin: 10px 0; color: #2e7d32;">Thank You, ${data.name}!</h2>
-            <p style="font-size: 16px;">We've received your quote request and will get back to you within 24 hours.</p>
+            <h2 style="margin: 0; color: #065f46;">Thank You, ${data.name}!</h2>
+            <p style="margin: 10px 0 0 0;">We've received your quote request and will get back to you within 24 hours.</p>
           </div>
 
-          <div style="margin: 30px 0;">
-            <h3 style="color: #764ba2;">What happens next?</h3>
-            <ol style="padding-left: 20px;">
-              <li style="margin-bottom: 10px;">Our logistics expert will review your requirements</li>
-              <li style="margin-bottom: 10px;">We'll calculate the best shipping rates</li>
-              <li style="margin-bottom: 10px;">You'll receive a detailed quote via email and phone</li>
-            </ol>
+          <div style="text-align: center; margin-bottom: 20px;">
+            <span class="quote-badge">Reference: ${quoteId}</span>
           </div>
 
-          <div style="background: #f3e5f5; padding: 20px; border-radius: 10px;">
-            <h4 style="margin: 0 0 10px 0; color: #764ba2;">Summary of your request:</h4>
-            <p><strong>From:</strong> ${data.origin} → <strong>To:</strong> ${data.destination}</p>
+          <h3>📋 Request Summary</h3>
+          <div class="summary-box">
+            <p><strong>Route:</strong> ${data.origin} → ${data.destination}</p>
             <p><strong>Freight Type:</strong> ${data.freightType}</p>
             <p><strong>Weight:</strong> ${data.weight}</p>
+            ${data.dimensions ? `<p><strong>Dimensions:</strong> ${data.dimensions}</p>` : ''}
           </div>
 
-          <div class="footer">
-            <p>Need to update your request? Reply to this email or contact our support team.</p>
-            <p style="margin-top: 10px;">© ${new Date().getFullYear()} B2B Logistics. All rights reserved.</p>
-          </div>
+          <p style="text-align: center; color: #4b5563;">
+            We'll contact you at:<br>
+            📧 ${data.email}<br>
+            📞 ${data.phone}
+          </p>
+        </div>
+        <div class="footer">
+          <p>© ${new Date().getFullYear()} B2B Logistics. All rights reserved.</p>
         </div>
       </div>
     </body>
@@ -216,57 +182,104 @@ const getCustomerEmailTemplate = (data) => {
   `;
 };
 
-export async function POST(request) {
+// ========== Main API Route ==========
+router.post('/request-quote', async (req, res) => {
+  console.log('\n=== 📨 NEW QUOTE REQUEST RECEIVED ===');
+  console.log('Time:', new Date().toLocaleString());
+  
   try {
-    // Parse request body
-    const body = await request.json();
+    const formData = req.body;
     
-    // Validate form data
-    const { isValid, errors } = validateFormData(body);
+    // Log received data
+    console.log('📋 Form Data Received:');
+    console.log('  - Name:', formData.name);
+    console.log('  - Email:', formData.email);
+    console.log('  - Phone:', formData.phone);
+    console.log('  - Origin:', formData.origin);
+    console.log('  - Destination:', formData.destination);
+    console.log('  - Freight Type:', formData.freightType);
+    console.log('  - Weight:', formData.weight);
     
-    if (!isValid) {
-      return NextResponse.json(
-        { success: false, errors },
-        { status: 400 }
-      );
+    // Basic validation
+    if (!formData.name || !formData.email || !formData.phone) {
+      console.log('❌ Validation Failed: Missing name/email/phone');
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email and phone are required'
+      });
+    }
+
+    if (!formData.origin || !formData.destination || !formData.freightType || !formData.weight) {
+      console.log('❌ Validation Failed: Missing shipment details');
+      return res.status(400).json({
+        success: false,
+        message: 'Please fill all shipment details'
+      });
     }
 
     // Generate quote ID
-    const quoteId = 'Q' + Date.now().toString().slice(-8);
+    const quoteId = generateQuoteId();
+    console.log('✅ Quote ID Generated:', quoteId);
+
+    // Create email transporter
+    console.log('🔧 Creating email transporter...');
+    const transporter = createTransporter();
+    
+    // Verify transporter
+    await transporter.verify();
+    console.log('✅ SMTP Connection Verified');
 
     // Send email to admin
-    await transporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
+    console.log('📧 Sending email to ADMIN...');
+    console.log('  From:', process.env.SMTP_USER);
+    console.log('  To:', process.env.ADMIN_EMAIL || process.env.SMTP_USER);
+    console.log('  Subject:', `🚚 New Quote Request - ${quoteId} - ${formData.origin} to ${formData.destination}`);
+    
+    const adminInfo = await transporter.sendMail({
+      from: `"B2B Logistics" <${process.env.SMTP_USER}>`,
       to: process.env.ADMIN_EMAIL || process.env.SMTP_USER,
-      replyTo: body.email,
-      subject: `🚚 New Quote Request - ${quoteId} - ${body.origin} to ${body.destination}`,
-      html: getAdminEmailTemplate({ ...body, quoteId }),
+      replyTo: formData.email,
+      subject: `🚚 New Quote Request - ${quoteId} - ${formData.origin} to ${formData.destination}`,
+      html: getAdminEmailTemplate(formData, quoteId)
     });
+    
+    console.log('✅ Admin email sent! Message ID:', adminInfo.messageId);
 
     // Send confirmation email to customer
-    await transporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
-      to: body.email,
+    console.log('📧 Sending email to CUSTOMER...');
+    console.log('  To:', formData.email);
+    
+    const customerInfo = await transporter.sendMail({
+      from: `"B2B Logistics" <${process.env.SMTP_USER}>`,
+      to: formData.email,
       subject: `Quote Request Received - ${quoteId}`,
-      html: getCustomerEmailTemplate({ ...body, quoteId }),
+      html: getCustomerEmailTemplate(formData, quoteId)
     });
+    
+    console.log('✅ Customer email sent! Message ID:', customerInfo.messageId);
+    console.log('🎉 ALL EMAILS SENT SUCCESSFULLY!\n');
 
     // Return success response
-    return NextResponse.json({
+    res.status(200).json({
       success: true,
-      message: 'Quote request submitted successfully',
+      message: 'Quote request sent successfully',
       quoteId: quoteId
     });
 
   } catch (error) {
-    console.error('Quote request error:', error);
+    console.error('\n❌ ERROR SENDING EMAILS:');
+    console.error('Error Name:', error.name);
+    console.error('Error Message:', error.message);
+    console.error('Error Code:', error.code);
+    console.error('Command:', error.command);
+    console.error('Response:', error.response);
+    console.error('Stack:', error.stack);
     
-    return NextResponse.json(
-      { 
-        success: false, 
-        message: 'Failed to send email. Please try again.'
-      },
-      { status: 500 }
-    );
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send email. Please try again.'
+    });
   }
-}
+});
+
+module.exports = router;

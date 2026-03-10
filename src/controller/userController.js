@@ -656,6 +656,8 @@ const loginUser = async (req, res) => {
 
 // ==================== PASSWORD RESET ====================
 
+// ==================== PASSWORD RESET ====================
+
 const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -712,6 +714,56 @@ const forgotPassword = async (req, res) => {
   }
 };
 
+// ✅ নতুন ফাংশন - Verify Reset OTP
+const verifyResetOTP = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and OTP are required"
+      });
+    }
+
+    console.log(`🔍 Verifying reset OTP for ${email}: ${otp}`);
+
+    // Find user with this OTP
+    const user = await UserModel.findOne({
+      email: email.toLowerCase(),
+      resetPasswordOTP: otp,
+      resetPasswordOTPExpires: { $gt: new Date() }
+    });
+
+    if (!user) {
+      console.log('❌ Invalid or expired OTP');
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP"
+      });
+    }
+
+    console.log('✅ OTP verified successfully');
+
+    res.status(200).json({
+      success: true,
+      message: "OTP verified successfully",
+      data: {
+        email: user.email,
+        verified: true
+      }
+    });
+
+  } catch (error) {
+    console.error("Verify reset OTP error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify OTP"
+    });
+  }
+};
+
+// ✅ আপডেট করা resetPassword ফাংশন
 const resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
@@ -789,6 +841,78 @@ const resetPassword = async (req, res) => {
     });
   }
 };
+
+// ✅ নতুন ফাংশন - Resend Reset OTP (optional)
+const resendResetOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required"
+      });
+    }
+
+    const user = await UserModel.findOne({ 
+      email: email.toLowerCase(), 
+      isVerified: true 
+    });
+
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If an account exists, OTP will be sent"
+      });
+    }
+
+    // Check if last OTP was sent within 1 minute
+    if (user.resetPasswordOTPExpires) {
+      const lastSentTime = new Date(user.resetPasswordOTPExpires);
+      lastSentTime.setMinutes(lastSentTime.getMinutes() - 10);
+      const oneMinuteAgo = new Date(Date.now() - 60000);
+      
+      if (lastSentTime > oneMinuteAgo) {
+        return res.status(429).json({
+          success: false,
+          message: "Please wait 1 minute before requesting another OTP"
+        });
+      }
+    }
+
+    // Generate new OTP
+    const otp = generateOTP();
+    const otpExpiry = new Date();
+    otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
+
+    // Update user with new OTP
+    user.resetPasswordOTP = otp;
+    user.resetPasswordOTPExpires = otpExpiry;
+    user.updateDate = new Date();
+    await user.save();
+
+    // Send OTP
+    await sendPasswordResetOTPEmail(email, otp, user.firstName);
+
+    console.log(`📧 New password reset OTP for ${email}: ${otp}`);
+
+    res.status(200).json({
+      success: true,
+      message: "New OTP sent to your email",
+      data: {
+        email: user.email,
+        expiresAt: otpExpiry
+      }
+    });
+
+  } catch (error) {
+    console.error("Resend reset OTP error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to resend OTP"
+    });
+  }
+}; 
 
 // ==================== PROTECTED ROUTES ====================
 
@@ -1205,5 +1329,7 @@ module.exports = {
   deleteUser,
   getUserById,
   updateUser,
-  getUsersByRole
+  getUsersByRole,
+  verifyResetOTP, 
+  resendResetOTP
 };
