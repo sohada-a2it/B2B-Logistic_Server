@@ -12,15 +12,22 @@ const { generateTrackingNumber } = require('../utils/trackingGenerator');
 const calculateProgress = (status) => {
     const order = [
         'pending',
+        'booking_requested',
+        'booking_confirmed',
         'picked_up_from_warehouse',
         'received_at_warehouse',
         'consolidated',
+        'ready_for_dispatch',
+        'loaded',
+        'dispatched',
         'departed_port_of_origin',
         'in_transit_sea_freight',
         'arrived_at_destination_port',
+        'arrived',
         'customs_cleared',
         'out_for_delivery',
-        'delivered'
+        'delivered',
+        'completed'
     ];
     
     const index = order.indexOf(status);
@@ -1209,6 +1216,7 @@ exports.exportTrackings = async (req, res) => {
 };
 
 // ==================== 10. TRACK BY NUMBER (Public) ====================
+// ==================== 10. TRACK BY NUMBER (Public) ====================
 exports.trackByNumber = async (req, res) => {
     try {
         const { trackingNumber } = req.params;
@@ -1222,7 +1230,10 @@ exports.trackByNumber = async (req, res) => {
                 select: 'bookingNumber sender receiver payment shipmentClassification courier'
             })
             .populate('customerId', 'companyName firstName lastName')
-            .populate('consolidationId')
+            .populate({
+                path: 'consolidationId',
+                select: 'consolidationNumber containerNumber containerType sealNumber status timeline'
+            })
             .lean();
 
         // If not found in shipments, search in bookings
@@ -1252,9 +1263,42 @@ exports.trackByNumber = async (req, res) => {
             });
         }
 
+        // Add consolidation status to timeline if available
+        let timeline = (shipment.milestones || shipment.timeline || []).map(entry => ({
+            status: entry.status,
+            location: entry.location,
+            description: entry.description,
+            date: entry.timestamp,
+            formattedDate: new Date(entry.timestamp).toLocaleString('en-US', {
+                dateStyle: 'medium',
+                timeStyle: 'short'
+            })
+        }));
+
+        // Add consolidation timeline events if they exist
+        if (shipment.consolidationId && shipment.consolidationId.timeline) {
+            const consolidationEvents = shipment.consolidationId.timeline.map(event => ({
+                status: event.status,
+                location: event.location || shipment.consolidationId.originWarehouse || 'Unknown',
+                description: event.description || `Consolidation ${event.status}`,
+                date: event.timestamp,
+                formattedDate: new Date(event.timestamp).toLocaleString('en-US', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short'
+                })
+            }));
+            
+            timeline = [...timeline, ...consolidationEvents];
+        }
+
+        // Sort by date (newest first)
+        timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
+
         // Format response for public view (limited info)
         const publicTrackingInfo = {
             trackingNumber: shipment.trackingNumber,
+            bookingNumber: shipment.bookingId?.bookingNumber,
+            shipmentNumber: shipment.shipmentNumber,
             status: shipment.status,
             statusDisplay: formatStatus(shipment.status),
             progress: calculateProgress(shipment.status),
@@ -1265,26 +1309,23 @@ exports.trackByNumber = async (req, res) => {
             lastUpdate: shipment.updatedAt,
             estimatedArrival: shipment.dates?.estimatedArrival || shipment.estimatedArrival,
             
-            // Limited package info
+            // Package info
             totalPackages: shipment.shipmentDetails?.totalPackages || 
                           shipment.totalPackages || 
                           (shipment.packages?.length || 0),
             totalWeight: shipment.shipmentDetails?.totalWeight || shipment.totalWeight || 0,
             
-            // Timeline (last 10 entries)
-            timeline: (shipment.milestones || shipment.timeline || [])
-                .slice(0, 10)
-                .map(entry => ({
-                    status: entry.status,
-                    location: entry.location,
-                    description: entry.description,
-                    date: entry.timestamp,
-                    formattedDate: new Date(entry.timestamp).toLocaleString('en-US', {
-                        dateStyle: 'medium',
-                        timeStyle: 'short'
-                    })
-                }))
-                .sort((a, b) => new Date(b.date) - new Date(a.date))
+            // Consolidation info (if available)
+            consolidation: shipment.consolidationId ? {
+                number: shipment.consolidationId.consolidationNumber,
+                containerNumber: shipment.consolidationId.containerNumber,
+                containerType: shipment.consolidationId.containerType,
+                sealNumber: shipment.consolidationId.sealNumber,
+                status: shipment.consolidationId.status
+            } : null,
+            
+            // Timeline (all events)
+            timeline: timeline.slice(0, 20) // Last 20 events
         };
 
         res.status(200).json({

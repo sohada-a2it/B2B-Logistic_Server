@@ -22,7 +22,7 @@ router.post("/reset-password", userController.resetPassword);
 // ==================== PROTECTED ROUTES (Authentication Needed) ====================
 // COMMON ROUTES (All Authenticated Users)
 router.get("/getUserprofile", protect, userController.getUserProfile);
-router.put("/updateUserprofile", protect, userController.updateProfile);
+router.put("/users/profile", protect, userController.updateProfile);
 router.post("/change-password", protect, userController.changePassword);
 router.post("/logout", protect, userController.logoutUser);
 

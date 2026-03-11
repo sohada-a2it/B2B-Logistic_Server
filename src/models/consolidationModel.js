@@ -93,19 +93,22 @@ const consolidationSchema = new mongoose.Schema({
         volume: Number
     }],
     
-    // ===== STATUS UPDATED =====
+    // ===== STATUS UPDATED WITH ALL VALUES =====
     status: {
         type: String,
         enum: [
             'draft',              // খসড়া
             'in_progress',        // কনসোলিডেশন চলছে
             'consolidated',       // কনসোলিডেশন সম্পন্ন
-            'ready_for_dispatch', // ডিসপ্যাচের জন্য প্রস্তুত (নতুন)
+            'ready_for_dispatch', // ডিসপ্যাচের জন্য প্রস্তুত
             'loaded',             // লোড করা হয়েছে
             'dispatched',         // ডিসপ্যাচ করা হয়েছে
             'in_transit',         // ট্রানজিটে
             'departed',           // পোর্ট ছেড়েছে
             'arrived',            // পৌঁছেছে
+            'customs_cleared',    // কাস্টমস ক্লিয়ারেন্স সম্পন্ন (নতুন)
+            'out_for_delivery',   // ডেলিভারির জন্য বের হয়েছে (নতুন)
+            'delivered',          // ডেলিভারি সম্পন্ন (নতুন)
             'completed'           // সম্পন্ন
         ],
         default: 'draft'
@@ -117,7 +120,8 @@ const consolidationSchema = new mongoose.Schema({
             type: String,
             enum: [
                 'draft', 'in_progress', 'consolidated', 'ready_for_dispatch',
-                'loaded', 'dispatched', 'in_transit', 'departed', 'arrived', 'completed'
+                'loaded', 'dispatched', 'in_transit', 'departed', 'arrived',
+                'customs_cleared', 'out_for_delivery', 'delivered', 'completed'
             ]
         },
         timestamp: {
@@ -228,6 +232,13 @@ consolidationSchema.methods.updateStatus = async function(newStatus, userId, loc
         this.actualDeparture = new Date();
     } else if (newStatus === 'arrived') {
         this.estimatedArrival = new Date();
+    } else if (newStatus === 'customs_cleared') {
+        // কাস্টমস ক্লিয়ারেন্সের তারিখ রেকর্ড করুন
+        this.customsClearedDate = new Date();
+    } else if (newStatus === 'delivered') {
+        this.deliveredDate = new Date();
+    } else if (newStatus === 'completed') {
+        this.completedDate = new Date();
     }
     
     return this.save();
