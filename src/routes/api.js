@@ -7,6 +7,7 @@ const shipmentController = require('../controller/shipmentController');
 const warehouseController = require('../controller/warehouseController');
 const consolidationController = require('../controller/consolidationController');
 const trackingController = require('../controller/trackingController');
+const damageReportController = require('../controller/damageController');
 const { body } = require('express-validator');
 // ==================== PUBLIC ROUTES (No Authentication Needed) ==================== 
 router.post("/login", userController.loginUser);  
@@ -50,7 +51,7 @@ router.get('/getBookingById/:id', bookingController.getBookingById);
 router.put('/booking/:id/price-quote', protect, adminOnly, bookingController.updatePriceQuote);
 
 // Customer response routes
-router.put('/booking/:id/accept',protect, adminOnly, bookingController.acceptQuote);
+router.put('/booking/:id/accept',protect,  bookingController.acceptQuote);
 router.put('/booking/:id/reject',protect, adminOnly, bookingController.rejectQuote);
 router.put('/booking/:id/cancel', bookingController.cancelBooking); 
 router.get('/my-bookings', protect, bookingController.getMyBookings);
@@ -165,7 +166,7 @@ router.post(
 // ==================== PUBLIC ROUTES ==================== 
 // ========== PUBLIC TRACKING (No Auth Required) ==========
 router.get('/getAllShipment',protect,  adminOnly, shipmentController.getAllShipments); 
-router.get('/track/:trackingNumber',protect, shipmentController.trackByNumber); 
+// router.get('/track/:trackingNumber',protect, shipmentController.trackByNumber); 
 
 // ========== CUSTOMER ROUTES ==========
 router.get('/my-shipments',protect,  shipmentController.getMyShipments); 
@@ -313,7 +314,7 @@ router.get('/queue', protect, consolidationController.getConsolidationQueue);
 router.post('/queue/add', protect, consolidationController.addToQueue);
 router.post('/queue/add-multiple', protect, consolidationController.addMultipleToQueue);
 router.get('/queue/summary', protect, consolidationController.getQueueSummary);
-router.delete('/queue/:id', protect, consolidationController.removeFromQueue);
+router.delete('/consolidation/queue/:id', protect, consolidationController.removeFromQueue);
 router.post('/queue/bulk-remove', protect, consolidationController.bulkRemoveFromQueue);
 
 // ========== Consolidation Routes ==========
@@ -346,4 +347,32 @@ router.put('/tracking/bulk/update',protect,adminOnly, trackingController.bulkUpd
 // Delete routes
 router.delete('/tracking/:id',protect,adminOnly, trackingController.deleteTracking);
 router.post('/tracking/bulk/delete',protect,adminOnly, trackingController.bulkDeleteTrackings);
+
+// ============================================
+// ✅ DAMAGE REPORT ROUTES
+// ============================================
+
+// GET /damage-reports/all - Get all damage reports (with filters)
+router.get('/damage-reports/all', protect, damageReportController.getAllDamageReports);
+
+// GET /damage-reports/stats - Get statistics
+router.get('/damage-reports/stats', protect, damageReportController.getDamageReportStats);
+
+// GET /damage-reports/export - Export to CSV
+router.get('/damage-reports/export', protect, damageReportController.exportDamageReports);
+
+// GET /damage-reports/:id - Get single damage report
+router.get('/damage-reports/:id', protect, damageReportController.getDamageReportById);
+
+// PUT /damage-reports/:id/status - Update status
+router.put('/damage-reports/:id/status', protect, damageReportController.updateDamageReportStatus);
+
+// POST /damage-reports/:id/insurance - Add insurance claim
+router.post('/damage-reports/:id/insurance', protect, damageReportController.addInsuranceClaim);
+
+// POST /damage-reports/bulk/update - Bulk update (Admin only)
+router.post('/damage-reports/bulk/update', protect, adminOnly, damageReportController.bulkUpdateDamageReports);
+
+// DELETE /damage-reports/:id - Delete report (Admin only)
+router.delete('/damage-reports/:id', protect, adminOnly, damageReportController.deleteDamageReport);
 module.exports = router;

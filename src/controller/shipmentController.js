@@ -1264,13 +1264,14 @@ exports.getShipmentStatistics = async (req, res) => {
 };
 
 // ========== 23. TRACK BY NUMBER (Public) ========== 
+// controllers/shipmentController.js - trackByNumber function আপডেট করুন
 exports.trackByNumber = async (req, res) => {
     try {
         const { trackingNumber } = req.params;
 
         const shipment = await Shipment.findOne({ trackingNumber })
             .populate('customerId', 'companyName firstName lastName')
-            .select('trackingNumber status milestones currentMilestone transport packages shipmentDetails actualDeliveryDate sender receiver');
+            .select('trackingNumber status milestones trackingUpdates currentMilestone transport packages shipmentDetails actualDeliveryDate sender receiver');
 
         if (!shipment) {
             return res.status(404).json({ 
@@ -1279,10 +1280,25 @@ exports.trackByNumber = async (req, res) => {
             });
         }
 
-        // Get latest updates
-        const timeline = (shipment.milestones || [])
-            .sort((a, b) => b.timestamp - a.timestamp)
-            .slice(0, 10);
+        // Combine milestones and tracking updates for complete timeline
+        const timeline = [
+            ...(shipment.milestones || []).map(m => ({
+                type: 'milestone',
+                status: m.status,
+                location: m.location,
+                description: m.description,
+                timestamp: m.timestamp,
+                formattedDate: m.timestamp ? new Date(m.timestamp).toLocaleString() : null
+            })),
+            ...(shipment.trackingUpdates || []).map(t => ({
+                type: 'tracking',
+                status: t.status,
+                location: t.location,
+                description: t.description,
+                timestamp: t.timestamp,
+                formattedDate: t.timestamp ? new Date(t.timestamp).toLocaleString() : null
+            }))
+        ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
         res.status(200).json({
             success: true,
@@ -1302,7 +1318,7 @@ exports.trackByNumber = async (req, res) => {
                 destination: shipment.shipmentDetails?.destination,
                 estimatedDelivery: shipment.transport?.estimatedArrival || shipment.estimatedArrivalDate,
                 actualDelivery: shipment.actualDeliveryDate,
-                timeline,
+                timeline,  // এখানে timeline data পাঠাচ্ছে
                 progress: shipment.getProgress?.() || 0
             }
         });

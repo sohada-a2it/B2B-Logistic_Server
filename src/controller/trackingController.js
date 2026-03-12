@@ -1232,7 +1232,7 @@ exports.trackByNumber = async (req, res) => {
             .populate('customerId', 'companyName firstName lastName')
             .populate({
                 path: 'consolidationId',
-                select: 'consolidationNumber containerNumber containerType sealNumber status timeline'
+                select: 'consolidationNumber containerNumber containerType sealNumber status timeline originWarehouse destinationPort'
             })
             .lean();
 
@@ -1263,38 +1263,142 @@ exports.trackByNumber = async (req, res) => {
             });
         }
 
-        // Add consolidation status to timeline if available
-        let timeline = (shipment.milestones || shipment.timeline || []).map(entry => ({
-            status: entry.status,
-            location: entry.location,
-            description: entry.description,
-            date: entry.timestamp,
-            formattedDate: new Date(entry.timestamp).toLocaleString('en-US', {
-                dateStyle: 'medium',
-                timeStyle: 'short'
-            })
-        }));
+        console.log('✅ Shipment found:', {
+            trackingNumber: shipment.trackingNumber,
+            status: shipment.status,
+            hasMilestones: !!(shipment.milestones?.length),
+            hasConsolidation: !!shipment.consolidationId,
+            consolidationStatus: shipment.consolidationId?.status
+        });
 
-        // Add consolidation timeline events if they exist
-        if (shipment.consolidationId && shipment.consolidationId.timeline) {
-            const consolidationEvents = shipment.consolidationId.timeline.map(event => ({
-                status: event.status,
-                location: event.location || shipment.consolidationId.originWarehouse || 'Unknown',
-                description: event.description || `Consolidation ${event.status}`,
-                date: event.timestamp,
-                formattedDate: new Date(event.timestamp).toLocaleString('en-US', {
-                    dateStyle: 'medium',
-                    timeStyle: 'short'
-                })
+        // প্রথমে shipment milestones নিন
+        let timeline = [];
+
+        // Shipment milestones যোগ করুন
+        if (shipment.milestones && shipment.milestones.length > 0) {
+            console.log(`📋 Found ${shipment.milestones.length} shipment milestones`);
+            const shipmentEvents = shipment.milestones.map(m => ({
+                status: m.status,
+                location: m.location || shipment.shipmentDetails?.origin || 'Unknown',
+                description: m.description || getStatusDescription(m.status),
+                date: m.timestamp || m.createdAt || new Date(),
+                formattedDate: m.timestamp ? new Date(m.timestamp).toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }) : 'N/A',
+                source: 'shipment'
             }));
-            
-            timeline = [...timeline, ...consolidationEvents];
+            timeline = [...timeline, ...shipmentEvents];
         }
 
-        // Sort by date (newest first)
+        // Consolidation timeline events যোগ করুন
+        // controllers/trackingController.js - trackByNumber function-এ
+
+// Consolidation timeline events যোগ করুন
+if (shipment.consolidationId && shipment.consolidationId.timeline) {
+    console.log(`📦 Found ${shipment.consolidationId.timeline.length} consolidation events`);
+    
+    const consolidationEvents = shipment.consolidationId.timeline.map(event => {
+        // Status mapping dictionary
+        const statusMap = {
+            'draft': 'pending',
+            'pending_consolidation': 'pending',
+            'in_progress': 'consolidating',
+            'consolidating': 'consolidating',
+            'consolidated': 'consolidated',
+            'ready_for_dispatch': 'ready_for_dispatch',
+            'loaded': 'loaded_in_container',
+            'loaded_in_container': 'loaded_in_container',
+            'dispatched': 'dispatched',
+            'in_transit': 'in_transit',
+            'departed': 'departed_port_of_origin',
+            'departed_port_of_origin': 'departed_port_of_origin',
+            'arrived': 'arrived_at_destination_port',
+            'arrived_at_destination_port': 'arrived_at_destination_port',
+            'customs_cleared': 'customs_cleared',
+            'out_for_delivery': 'out_for_delivery',
+            'delivered': 'delivered',
+            'completed': 'completed'
+        };
+        
+        const displayStatus = statusMap[event.status] || event.status;
+        
+        return {
+            status: displayStatus,
+            location: event.location || 
+                     shipment.consolidationId.originWarehouse || 
+                     'China Warehouse',
+            description: event.description || this.getStatusDescription(displayStatus),
+            date: event.timestamp || new Date(),
+            formattedDate: event.timestamp ? new Date(event.timestamp).toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            }) : 'N/A'
+        };
+    });
+    
+    timeline = [...timeline, ...consolidationEvents];
+}
+
+        // Tracking updates যোগ করুন (যদি থাকে)
+        if (shipment.trackingUpdates && shipment.trackingUpdates.length > 0) {
+            console.log(`📍 Found ${shipment.trackingUpdates.length} tracking updates`);
+            const trackingEvents = shipment.trackingUpdates.map(t => ({
+                status: t.status,
+                location: t.location || 'Unknown',
+                description: t.description || 'Tracking update',
+                date: t.timestamp || t.createdAt || new Date(),
+                formattedDate: t.timestamp ? new Date(t.timestamp).toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }) : 'N/A',
+                source: 'tracking'
+            }));
+            timeline = [...timeline, ...trackingEvents];
+        }
+
+        // Booking timeline যোগ করুন (যদি booking থেকে আসে)
+        if (shipment.timeline && shipment.timeline.length > 0) {
+            console.log(`📅 Found ${shipment.timeline.length} booking timeline events`);
+            const bookingEvents = shipment.timeline.map(t => ({
+                status: t.status,
+                location: t.location || 'Unknown',
+                description: t.description || 'Booking update',
+                date: t.timestamp || t.createdAt || new Date(),
+                formattedDate: t.timestamp ? new Date(t.timestamp).toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }) : 'N/A',
+                source: 'booking'
+            }));
+            timeline = [...timeline, ...bookingEvents];
+        }
+
+        // Sort timeline by date (newest first)
         timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-        // Format response for public view (limited info)
+        console.log(`⏰ Final timeline has ${timeline.length} events`);
+        if (timeline.length > 0) {
+            console.log('📊 Latest event:', {
+                status: timeline[0].status,
+                location: timeline[0].location,
+                date: timeline[0].formattedDate
+            });
+        }
+
+        // Format response for public view
         const publicTrackingInfo = {
             trackingNumber: shipment.trackingNumber,
             bookingNumber: shipment.bookingId?.bookingNumber,
@@ -1302,11 +1406,13 @@ exports.trackByNumber = async (req, res) => {
             status: shipment.status,
             statusDisplay: formatStatus(shipment.status),
             progress: calculateProgress(shipment.status),
-            origin: shipment.shipmentDetails?.origin || shipment.origin,
-            destination: shipment.shipmentDetails?.destination || shipment.destination,
-            currentLocation: shipment.transport?.currentLocation?.location || 
-                            shipment.currentLocation?.location || 'Unknown',
-            lastUpdate: shipment.updatedAt,
+            origin: shipment.shipmentDetails?.origin || shipment.origin || 'China',
+            destination: shipment.shipmentDetails?.destination || shipment.destination || 'USA',
+            currentLocation: timeline[0]?.location || 
+                            shipment.transport?.currentLocation?.location || 
+                            shipment.currentLocation?.location || 
+                            'Unknown',
+            lastUpdate: timeline[0]?.date || shipment.updatedAt,
             estimatedArrival: shipment.dates?.estimatedArrival || shipment.estimatedArrival,
             
             // Package info
@@ -1315,7 +1421,7 @@ exports.trackByNumber = async (req, res) => {
                           (shipment.packages?.length || 0),
             totalWeight: shipment.shipmentDetails?.totalWeight || shipment.totalWeight || 0,
             
-            // Consolidation info (if available)
+            // Consolidation info
             consolidation: shipment.consolidationId ? {
                 number: shipment.consolidationId.consolidationNumber,
                 containerNumber: shipment.consolidationId.containerNumber,
@@ -1325,7 +1431,7 @@ exports.trackByNumber = async (req, res) => {
             } : null,
             
             // Timeline (all events)
-            timeline: timeline.slice(0, 20) // Last 20 events
+            timeline: timeline.slice(0, 30) // Last 30 events
         };
 
         res.status(200).json({

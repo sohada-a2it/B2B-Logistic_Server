@@ -420,8 +420,8 @@ exports.updatePriceQuote = async (req, res) => {
                     currency: currency,
                     validUntil: booking.quotedPrice.validUntil,
                     breakdown: breakdown,
-                    acceptUrl: `${process.env.FRONTEND_URL}/customer/bookings/${booking._id}/accept`,
-                    rejectUrl: `${process.env.FRONTEND_URL}/customer/bookings/${booking._id}/reject`,
+                    acceptUrl: `${process.env.FRONTEND_URL}/booking/${booking._id}/accept`,
+                    rejectUrl: `${process.env.FRONTEND_URL}/booking/${booking._id}/reject`,
                     dashboardUrl: `${process.env.FRONTEND_URL}/customer/dashboard`
                 }
             });
@@ -1619,83 +1619,63 @@ exports.getInvoiceById = async (req, res) => {
 };
 
 // ========== 3. GET INVOICES BY CUSTOMER ==========
+// backend/controllers/invoiceController.js
+
 exports.getInvoicesByCustomer = async (req, res) => {
-    try {
-        const { customerId } = req.params;
-        const { page = 1, limit = 20, status } = req.query;
-
-        // Check permission (customer can only see their own)
-        if (req.user.role === 'customer' && customerId !== req.user._id.toString()) {
-            return res.status(403).json({
-                success: false,
-                message: 'Access denied. You can only view your own invoices.'
-            });
-        }
-
-        let filter = { customerId };
-        if (status) filter.paymentStatus = status;
-
-        const total = await Invoice.countDocuments(filter);
-
-        const invoices = await Invoice.find(filter)
-            .populate('bookingId', 'bookingNumber')
-            .populate('createdBy', 'firstName lastName')
-            .sort('-createdAt')
-            .limit(parseInt(limit))
-            .skip((parseInt(page) - 1) * parseInt(limit));
-
-        // Calculate customer total
-        const totals = await Invoice.aggregate([
-            { $match: { customerId: new mongoose.Types.ObjectId(customerId) } },
-            {
-                $group: {
-                    _id: null,
-                    totalAmount: { $sum: '$totalAmount' },
-                    paidAmount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$paymentStatus', 'paid'] }, '$totalAmount', 0]
-                        }
-                    },
-                    pendingAmount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$paymentStatus', 'pending'] }, '$totalAmount', 0]
-                        }
-                    },
-                    overdueAmount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$paymentStatus', 'overdue'] }, '$totalAmount', 0]
-                        }
-                    },
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-
-        res.status(200).json({
-            success: true,
-            data: invoices,
-            summary: totals[0] || {
-                totalAmount: 0,
-                paidAmount: 0,
-                pendingAmount: 0,
-                overdueAmount: 0,
-                count: 0
-            },
-            pagination: {
-                total,
-                page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)),
-                limit: parseInt(limit)
-            }
-        });
-
-    } catch (error) {
-        console.error('Get invoices by customer error:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
+  try {
+    const { customerId } = req.params;
+    const { page = 1, limit = 20, status } = req.query;
+    
+    let query = {};
+    
+    // চেক করুন customerId MongoDB ObjectId কিনা
+    const isValidObjectId = mongoose.Types.ObjectId.isValid(customerId);
+    
+    if (isValidObjectId) {
+      // যদি ObjectId হয়, তাহলে ObjectId হিসেবে ব্যবহার করুন
+      query.customerId = customerId;
+    } else {
+      // যদি স্ট্রিং হয়, তাহলে স্ট্রিং হিসেবে ব্যবহার করুন
+      // অথবা অন্য কোন ফিল্ডে খুঁজুন (যেমন: customerCode, customerNumber)
+      query.$or = [
+        { customerCode: customerId },
+        { customerNumber: customerId },
+        { 'customerInfo.customerId': customerId }
+      ];
     }
+    
+    if (status) {
+      query.status = status;
+    }
+    
+    const invoices = await Invoice.find(query)
+      .populate('customerId', 'name email companyName')
+      .populate('bookingId')
+      .populate('shipmentId')
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
+    
+    const total = await Invoice.countDocuments(query);
+    
+    res.status(200).json({
+      success: true,
+      data: invoices,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get invoices by customer error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 };
 
 // ========== 4. UPDATE INVOICE ==========

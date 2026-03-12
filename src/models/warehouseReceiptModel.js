@@ -77,7 +77,13 @@ const warehouseReceiptSchema = new mongoose.Schema({
         },
         condition: {
             type: String,
-            enum: ['Good', 'Damaged', 'Partial', 'Shortage', 'Excess'],
+            enum: ['Good',              // ✅ Good condition
+                'Damaged',            // ✅ Damaged (general)
+                'Partial',            // ✅ Partially damaged
+                'Shortage',           // ✅ Shortage
+                'Excess',             // ✅ Excess
+                'Minor Damage',       // ✅ Minor Damage যোগ করুন
+                'Major Damage' ],
             default: 'Good'
         },
         remarks: String

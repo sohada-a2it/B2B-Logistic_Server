@@ -8,6 +8,7 @@ const Consolidation = require('../models/consolidationModel');
 const Shipment = require('../models/shipmentModel');
 const Booking = require('../models/bookingModel');
 const ConsolidationQueue = require('../models/consolidationQueueModel'); 
+const DamageReport = require('../models/damageReportModel'); 
 const User = require('../models/userModel');
 const { sendEmail } = require('../utils/emailService');
 
@@ -533,6 +534,7 @@ exports.startConsolidation = async (req, res) => {
 };
 
 // ========== 8. COMPLETE CONSOLIDATION ==========
+// ========== 8. COMPLETE CONSOLIDATION (FIXED) ==========
 exports.completeConsolidation = async (req, res) => {
     try {
         const { id } = req.params;
@@ -558,7 +560,7 @@ exports.completeConsolidation = async (req, res) => {
 
         await consolidation.save();
 
-        // Update shipments status
+        // Update shipments status and remove from queue
         for (const shipmentId of consolidation.shipments) {
             const shipment = await Shipment.findById(shipmentId);
             
@@ -591,6 +593,16 @@ exports.completeConsolidation = async (req, res) => {
                     }
                 }
             );
+
+            // ✅ FIX: ConsolidationQueue থেকে রিমুভ করুন
+            const receipt = await WarehouseReceipt.findOne({ shipmentId: shipment._id });
+            if (receipt) {
+                const queueResult = await ConsolidationQueue.deleteMany({ 
+                    receiptId: receipt._id 
+                });
+                
+                console.log(`✅ Removed ${queueResult.deletedCount} items from queue for shipment ${shipment.trackingNumber}`);
+            }
         }
 
         // Notify operations team
@@ -622,6 +634,7 @@ exports.completeConsolidation = async (req, res) => {
 };
 
 // ========== 9. LOAD AND DEPART CONSOLIDATION ==========
+// ========== 9. LOAD AND DEPART CONSOLIDATION (FIXED) ==========
 exports.loadAndDepart = async (req, res) => {
     try {
         const { id } = req.params;
@@ -666,6 +679,14 @@ exports.loadAndDepart = async (req, res) => {
             };
 
             await shipment.save();
+
+            // ✅ FIX: নিশ্চিত করুন যে এগুলো আর কিউতে নেই
+            const receipt = await WarehouseReceipt.findOne({ shipmentId: shipment._id });
+            if (receipt) {
+                await ConsolidationQueue.deleteMany({ 
+                    receiptId: receipt._id 
+                });
+            }
 
             // Notify customers
             const booking = await Booking.findById(shipment.bookingId)
@@ -940,15 +961,20 @@ exports.createWarehouse = async (req, res) => {
 };
 
 // ========== 17. INSPECT RECEIVED SHIPMENT ========== 
+// controllers/warehouseController.js - inspectShipment ফাংশন (FINAL FIXED)
+
 exports.inspectShipment = async (req, res) => {
     try {
         const { receiptId } = req.params;
         const inspectionData = req.body;
 
-        // Find receipt
+        console.log('🔍 Receiving inspection data:', inspectionData);
+
+        // Find receipt with all necessary populated data
         const receipt = await WarehouseReceipt.findById(receiptId)
             .populate('shipmentId')
-            .populate('customerId');
+            .populate('customerId')
+            .populate('receivedBy');
 
         if (!receipt) {
             return res.status(404).json({
@@ -957,78 +983,232 @@ exports.inspectShipment = async (req, res) => {
             });
         }
 
-        // Update receipt with inspection
+        // ============================================
+        // ✅ STEP 1: Update receipt with inspection data
+        // ============================================
+        
+        // Save inspection details
         receipt.inspection = {
             conductedBy: req.user._id,
             conductedAt: new Date(),
-            condition: inspectionData.condition,
-            findings: inspectionData.findings,
+            condition: inspectionData.condition,        // 'Good', 'Minor Damage', 'Major Damage'
+            findings: inspectionData.findings || '',
             photos: inspectionData.photos || [],
-            disposition: inspectionData.disposition,
-            details: inspectionData.details,
-            summary: inspectionData.summary
+            disposition: inspectionData.disposition || 'restock',
+            details: inspectionData.details || [],       // Per package inspection
+            summary: inspectionData.summary || {
+                totalPackages: receipt.packages.length,
+                totalItems: receipt.packages.reduce((sum, p) => sum + (p.quantity || 1), 0),
+                goodItems: 0,
+                damagedItems: 0
+            }
         };
-        receipt.status = 'inspected';
+
+        // Update receipt status based on condition
+        if (inspectionData.condition === 'Good') {
+            receipt.status = 'inspected';  // Good items ready for storage
+        } else {
+            receipt.status = 'damaged_report';  // Damaged items need special handling
+        }
+
+        // Update package conditions
+        if (inspectionData.details && inspectionData.details.length > 0) {
+            receipt.packages.forEach((pkg, index) => {
+                if (inspectionData.details[index]) {
+                    pkg.condition = inspectionData.details[index].condition || pkg.condition;
+                    pkg.remarks = inspectionData.details[index].notes || pkg.remarks;
+                    if (inspectionData.details[index].passed !== undefined) {
+                        pkg.quantity = inspectionData.details[index].passed;
+                    }
+                }
+            });
+        }
+
         await receipt.save();
+        console.log('✅ Receipt updated with inspection');
 
         // ============================================
-        // 🟢 Add to Consolidation Queue if Good
+        // ✅ STEP 2: Update inventory items
         // ============================================
         
-        let addedToQueue = false;
-        let groupKey = null;
+        const inventoryItems = await WarehouseInventory.find({ receiptId: receipt._id });
         
+        for (let i = 0; i < inventoryItems.length; i++) {
+            const inventory = inventoryItems[i];
+            const inspectionDetail = inspectionData.details?.[i];
+            
+            inventory.condition = inspectionData.condition;
+            inventory.status = inspectionData.condition === 'Good' ? 'inspected' : 'damaged';
+            inventory.inspectedBy = req.user._id;
+            inventory.inspectedAt = new Date();
+            
+            if (inspectionDetail) {
+                inventory.remarks = inspectionDetail.notes || '';
+                if (inspectionDetail.passed !== undefined) {
+                    inventory.quantity = inspectionDetail.passed;
+                }
+            }
+            
+            await inventory.save();
+        }
+        
+        console.log(`✅ Updated ${inventoryItems.length} inventory items`);
+
+        // ============================================
+        // ✅ STEP 3: Handle Damage Report (DELETE if Good, CREATE if Damaged)
+        // ============================================
+        
+        let damageReport = null;
+        const shipment = receipt.shipmentId;
+
+        // Check if there's an existing damage report for this receipt
+        const existingDamageReport = await DamageReport.findOne({ 
+            receiptId: receipt._id 
+        });
+
         if (inspectionData.condition === 'Good') {
-            const shipment = receipt.shipmentId;
+            // ✅ If condition is Good, DELETE any existing damage report
+            if (existingDamageReport) {
+                await DamageReport.deleteOne({ _id: existingDamageReport._id });
+                console.log('✅ Existing damage report deleted');
+            }
+        } else {
+            // ✅ If condition is Damaged, UPDATE or CREATE damage report
             
-            // Get ALL required fields
-            const mainType = shipment.shipmentClassification?.mainType || 'unknown';
-            const subType = shipment.shipmentClassification?.subType || 'unknown';
-            const origin = shipment.shipmentDetails?.origin || 'Unknown';
-            const destination = shipment.shipmentDetails?.destination || 'Unknown';
+            const dispositionMap = {
+                'restock': 'quarantine',
+                'scrap': 'scrap',
+                'return': 'return',
+                'rework': 'rework',
+                'quarantine': 'quarantine',
+                'insurance': 'insurance'
+            };
             
-            // Create COMPLETE group key with ALL FOUR parts
+            const mappedDisposition = dispositionMap[inspectionData.disposition] || 'quarantine';
+            
+            if (existingDamageReport) {
+                // Update existing damage report
+                existingDamageReport.condition = inspectionData.condition;
+                existingDamageReport.findings = inspectionData.findings || 'Damaged goods detected';
+                existingDamageReport.details = inspectionData.details || [];
+                existingDamageReport.disposition = mappedDisposition;
+                existingDamageReport.location = receipt.storageLocation;
+                existingDamageReport.reviewedBy = req.user._id;
+                existingDamageReport.reviewedAt = new Date();
+                
+                await existingDamageReport.save();
+                damageReport = existingDamageReport;
+                console.log('✅ Damage report updated:', damageReport.reportNumber);
+            } else {
+                // Create new damage report
+                damageReport = await DamageReport.create({
+                    receiptId: receipt._id,
+                    shipmentId: shipment?._id,
+                    reportNumber: `DAM-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                    condition: inspectionData.condition,
+                    findings: inspectionData.findings || 'Damaged goods detected',
+                    details: inspectionData.details || [],
+                    reportedBy: req.user._id,
+                    reportedAt: new Date(),
+                    status: 'pending_review',
+                    disposition: mappedDisposition,
+                    location: receipt.storageLocation
+                });
+                console.log('✅ Damage report created:', damageReport.reportNumber);
+            }
+        }
+
+        // ============================================
+        // ✅ STEP 4: Handle Consolidation Queue (ADD if Good, REMOVE if Damaged)
+        // ============================================
+        
+// controllers/warehouseController.js - inspectShipment ফাংশনের STEP 4
+
+// ============================================
+// ✅ STEP 4: Handle Consolidation Queue (ADD if Good, REMOVE if Damaged)
+// ============================================
+        
+let addedToQueue = false;
+let groupKey = null;
+let removedFromQueue = false;
+
+console.log('🔍 STEP 4 - Checking queue for receipt:', receipt._id);
+console.log('📦 Condition:', inspectionData.condition);
+
+// Check if there's an existing queue entry for this receipt
+const existingQueueItem = await ConsolidationQueue.findOne({ 
+    receiptId: receipt._id,
+    status: { $in: ['pending', 'assigned'] }
+});
+
+console.log('📋 Existing queue item:', existingQueueItem ? 'YES' : 'NO');
+if (existingQueueItem) {
+    console.log('   - Queue ID:', existingQueueItem._id);
+    console.log('   - Status:', existingQueueItem.status);
+    console.log('   - Group Key:', existingQueueItem.groupKey);
+}
+
+if (inspectionData.condition === 'Good') {
+    console.log('✅ Condition is GOOD - should add to queue');
+    
+    if (existingQueueItem) {
+        // Already in queue, do nothing
+        console.log('ℹ️ Shipment already in queue - skipping');
+        addedToQueue = false;
+    } else {
+        // Add to queue
+        console.log('➕ Adding to queue...');
+        
+        if (shipment) {
+            console.log('📦 Shipment found:', shipment._id);
+            console.log('   - Tracking:', shipment.trackingNumber);
+            console.log('   - MainType:', shipment.shipmentClassification?.mainType);
+            console.log('   - SubType:', shipment.shipmentClassification?.subType);
+            console.log('   - Origin:', shipment.shipmentDetails?.origin);
+            console.log('   - Destination:', shipment.shipmentDetails?.destination);
+            
+            const mainType = shipment.shipmentClassification?.mainType || 'general';
+            const subType = shipment.shipmentClassification?.subType || 'cargo';
+            const origin = shipment.shipmentDetails?.origin || 'unknown';
+            const destination = shipment.shipmentDetails?.destination || 'unknown';
+            
             groupKey = `${mainType}_${subType}_${origin}_${destination}`;
+            console.log('🔑 Group Key:', groupKey);
             
-            // Check if already in queue
-            const existingInQueue = await ConsolidationQueue.findOne({
-                shipmentId: shipment._id,
-                status: { $in: ['pending', 'assigned'] }
+            // Calculate totals
+            let totalWeight = 0;
+            let totalVolume = 0;
+            let totalPackages = 0;
+            
+            receipt.packages.forEach((pkg, idx) => {
+                const qty = inspectionData.details?.[idx]?.passed || pkg.quantity || 1;
+                totalPackages += qty;
+                totalWeight += (pkg.weight || 0) * qty;
+                totalVolume += (pkg.volume || 0) * qty;
             });
             
-            if (!existingInQueue) {
-                // Calculate totals
-                let totalWeight = 0;
-                let totalVolume = 0;
-                let totalPackages = 0;
-                
-                receipt.packages.forEach((pkg, idx) => {
-                    const qty = inspectionData.details[idx]?.passed || pkg.quantity || 1;
-                    totalPackages += qty;
-                    totalWeight += (pkg.weight || 0) * qty;
-                    totalVolume += (pkg.volume || 0) * qty;
-                });
-                
-                // Add to queue with ALL fields
-                await ConsolidationQueue.create({
+            console.log('📊 Totals:', { totalPackages, totalWeight, totalVolume });
+            
+            try {
+                // Create queue entry
+                const queueEntry = await ConsolidationQueue.create({
                     shipmentId: shipment._id,
                     receiptId: receipt._id,
                     warehouseId: receipt.warehouseId,
                     customerId: receipt.customerId?._id,
                     trackingNumber: shipment.trackingNumber,
                     
-                    // CRITICAL FIELDS FOR GROUPING
-                    mainType: mainType,
-                    subType: subType,
-                    origin: origin,
-                    destination: destination,
+                    mainType,
+                    subType,
+                    origin,
+                    destination,
                     destinationCountry: shipment.shipmentDetails?.destinationCountry,
-                    groupKey: groupKey,  // Complete groupKey
+                    groupKey,
                     
                     packages: receipt.packages.map((pkg, idx) => ({
                         description: pkg.description,
                         packagingType: pkg.packagingType,
-                        quantity: inspectionData.details[idx]?.passed || pkg.quantity,
+                        quantity: inspectionData.details?.[idx]?.passed || pkg.quantity,
                         weight: pkg.weight,
                         volume: pkg.volume,
                         condition: 'Good'
@@ -1037,6 +1217,7 @@ exports.inspectShipment = async (req, res) => {
                     totalWeight,
                     totalVolume,
                     totalPackages,
+                    
                     status: 'pending',
                     addedBy: req.user._id,
                     addedAt: new Date(),
@@ -1044,38 +1225,172 @@ exports.inspectShipment = async (req, res) => {
                 });
                 
                 addedToQueue = true;
-                
-                console.log('✅ Shipment added to queue with complete grouping:');
-                console.log(`   📦 Tracking: ${shipment.trackingNumber}`);
-                console.log(`   🔑 Group Key: ${groupKey}`);
-                console.log(`   📊 MainType: ${mainType}, SubType: ${subType}`);
-                console.log(`   📍 Route: ${origin} → ${destination}`);
-                
-                // Update shipment status
-                shipment.warehouseStatus = 'ready_for_consolidation';
-                await shipment.save();
-            } else {
-                console.log('⚠️ Shipment already in queue:', shipment.trackingNumber);
+                console.log('✅ SUCCESS: Shipment added to queue:', queueEntry._id);
+                console.log('   - Group Key:', queueEntry.groupKey);
+            } catch (queueError) {
+                console.error('❌ Queue creation error:', queueError);
+                // Don't throw, just log
             }
+        } else {
+            console.log('❌ No shipment found! Cannot add to queue');
+        }
+    }
+} else {
+    console.log('❌ Condition is NOT GOOD - should remove from queue if exists');
+    if (existingQueueItem) {
+        await ConsolidationQueue.deleteOne({ _id: existingQueueItem._id });
+        removedFromQueue = true;
+        console.log('✅ Shipment removed from queue (damaged)');
+    } else {
+        console.log('ℹ️ No existing queue item to remove');
+    }
+}
+
+console.log('📊 Final - addedToQueue:', addedToQueue, 'removedFromQueue:', removedFromQueue);
+
+        // ============================================
+        // ✅ STEP 5: Update Shipment status (FIXED)
+        // ============================================
+        
+// controllers/warehouseController.js - inspectShipment ফাংশনের STEP 5 এ এই কোড যোগ করুন
+
+// ============================================
+// ✅ STEP 5: Update Shipment status (FIXED - WITH CLEANUP)
+// ============================================
+        
+if (shipment) {
+    // Use appropriate status from model enum
+    shipment.status = inspectionData.condition === 'Good' ? 'inspected' : 'damage_reported';
+    
+    if (damageReport) {
+        shipment.damageReportId = damageReport._id;
+    }
+    
+    shipment.milestones = shipment.milestones || [];
+    
+    // ✅ FIX: আগের invalid milestones সরান
+    const validStatuses = [
+        'pending', 'picked_up_from_warehouse', 'departed_port_of_origin',
+        'in_transit_sea_freight', 'arrived_at_destination_port', 'customs_cleared',
+        'out_for_delivery', 'inspected', 'damage_reported', 'delivered',
+        'on_hold', 'cancelled', 'returned', 'received_at_warehouse'
+    ];
+    
+    // Filter out invalid milestones
+    const invalidMilestones = shipment.milestones.filter(m => 
+        !validStatuses.includes(m.status)
+    );
+    
+    if (invalidMilestones.length > 0) {
+        console.log('⚠️ Found invalid milestones:', invalidMilestones.map(m => m.status));
+        
+        // শুধু valid milestones রাখুন
+        shipment.milestones = shipment.milestones.filter(m => 
+            validStatuses.includes(m.status)
+        );
+        
+        console.log(`✅ Removed ${invalidMilestones.length} invalid milestones`);
+    }
+    
+    // ✅ Always use valid status from enum
+    const milestoneStatus = inspectionData.condition === 'Good' ? 'inspected' : 'damage_reported';
+    
+    // Build description with all information
+    let description = `Inspection completed. `;
+    description += `Condition: ${inspectionData.condition}. `;
+    
+    if (inspectionData.condition === 'Good') {
+        if (addedToQueue) {
+            description += 'Added to consolidation queue.';
+        } else if (existingQueueItem) {
+            description += 'Already in consolidation queue.';
+        }
+    } else {
+        if (removedFromQueue) {
+            description += 'Removed from consolidation queue.';
+        }
+        if (damageReport) {
+            description += ` Damage report: ${damageReport.reportNumber}.`;
+        }
+    }
+    
+    // Add findings if any
+    if (inspectionData.findings && inspectionData.findings !== 'Inspection completed') {
+        description += ` Findings: ${inspectionData.findings}`;
+    }
+    
+    shipment.milestones.push({
+        status: milestoneStatus,  // ✅ Always valid: 'inspected' or 'damage_reported'
+        location: receipt.storageLocation ? 
+            `Zone ${receipt.storageLocation.zone}` : 'Warehouse',
+        description: description,
+        timestamp: new Date(),
+        updatedBy: req.user._id
+    });
+    
+    try {
+        await shipment.save();
+        console.log('✅ Shipment updated with milestone');
+    } catch (shipmentError) {
+        console.error('❌ Shipment save error:', shipmentError);
+        // Continue even if shipment update fails
+    }
+}
+
+        // ============================================
+        // ✅ STEP 6: Send response with appropriate message
+        // ============================================
+        
+        let message = '';
+        if (inspectionData.condition === 'Good') {
+            message = addedToQueue 
+                ? 'Inspection completed. Shipment added to consolidation queue.'
+                : 'Inspection completed. Shipment already in queue.';
+        } else {
+            message = removedFromQueue
+                ? `Inspection completed. Shipment marked as ${inspectionData.condition} and removed from queue.`
+                : `Inspection completed. Shipment marked as ${inspectionData.condition}.`;
         }
 
-        // Response এ shipment variable use না করে সরাসরি receipt থেকে data নিন
-        res.status(200).json({
+        const response = {
             success: true,
-            message: 'Inspection completed successfully',
+            message,
             data: {
-                receipt,
+                receiptId: receipt._id,
+                receiptNumber: receipt.receiptNumber,
                 condition: inspectionData.condition,
-                addedToQueue: addedToQueue,
-                groupKey: groupKey,
-                trackingNumber: receipt.shipmentId?.trackingNumber,
-                origin: receipt.shipmentId?.shipmentDetails?.origin,
-                destination: receipt.shipmentId?.shipmentDetails?.destination
+                status: receipt.status,
+                inspection: {
+                    conductedAt: receipt.inspection.conductedAt,
+                    condition: receipt.inspection.condition,
+                    findings: receipt.inspection.findings
+                },
+                trackingNumber: shipment?.trackingNumber,
+                storageLocation: receipt.storageLocation,
+                addedToQueue,
+                removedFromQueue,
+                groupKey,
+                damageReport: damageReport ? {
+                    id: damageReport._id,
+                    reportNumber: damageReport.reportNumber,
+                    status: damageReport.status
+                } : null
             }
-        });
+        };
+
+        res.status(200).json(response);
 
     } catch (error) {
         console.error('❌ Inspect shipment error:', error);
+        
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                error: 'Validation failed',
+                details: error.errors
+            });
+        }
+        
         res.status(500).json({ 
             success: false, 
             error: error.message 

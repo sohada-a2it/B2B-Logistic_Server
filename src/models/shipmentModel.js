@@ -19,14 +19,25 @@ const shipmentSubTypes = [
 ];
 
 // Shipment Status (Booking-এর shipmentStatuses থেকে)
+// models/shipmentModel.js - status enum আপডেট করুন
+
 const shipmentStatuses = [
     'pending',
     'picked_up_from_warehouse',
     'departed_port_of_origin',
     'in_transit_sea_freight',
+    'in_transit',              // ✅ যোগ করুন (in_transit_sea_freight এর পাশাপাশি)
     'arrived_at_destination_port',
     'customs_cleared',
     'out_for_delivery',
+    'inspected',                   
+    'damage_reported',
+    'consolidating',        // ← নতুন 
+    'consolidated',           // ✅ যোগ করুন
+    'ready_for_dispatch',       // ✅ যোগ করুন
+    'loaded_in_container',      // ✅ যোগ করুন
+    'dispatched',               // ✅ যোগ করুন
+    'completed',                // ✅ যোগ করুন
     'delivered',
     'on_hold',
     'cancelled',
