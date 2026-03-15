@@ -90,15 +90,17 @@ exports.protect = async (req, res, next) => {
 };
 
 exports.adminOnly = (req, res, next) => {
-  console.log('👑 Admin check for:', req.user?.email);
+  console.log('👑 Admin/Warehouse check for:', req.user?.email);
+  console.log('User role:', req.user?.role);
   
-  if (req.user.role !== "admin") {
+  // Allow both admin and warehouse roles
+  if (req.user.role !== "admin" && req.user.role !== "warehouse") {
     return res.status(403).json({ 
       success: false,
-      message: "Admin only access" 
+      message: "Admin or Warehouse access only" 
     });
   }
   
-  console.log('✅ Admin access granted');
+  console.log('✅ Admin/Warehouse access granted');
   next();
 };
