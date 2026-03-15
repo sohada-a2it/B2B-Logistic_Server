@@ -116,8 +116,7 @@ router.get(
 
 router.get(
     '/getInvoiceById/:id', 
-    protect, 
-    adminOnly, 
+    protect,  
     bookingController.getInvoiceById
 );
 
@@ -150,7 +149,7 @@ router.post(
 );
 
 router.post(
-    '/invoice/:id/generate-pdf', 
+    '/invoices/:id/generate-pdf', 
     protect, 
     adminOnly, 
     bookingController.generateInvoicePDF

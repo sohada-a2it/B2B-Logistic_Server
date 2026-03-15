@@ -6,7 +6,7 @@ const Invoice = require('../models/invoiceModel');
 const User = require('../models/userModel');
 const { sendEmail } = require('../utils/emailService');
 const { generateTrackingNumber } = require('../utils/trackingGenerator');
-
+const mongoose = require('mongoose')
 // ========== HELPER FUNCTIONS ==========
 
 // Generate shipment number
